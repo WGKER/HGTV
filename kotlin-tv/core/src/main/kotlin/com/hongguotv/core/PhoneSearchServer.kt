@@ -13,13 +13,27 @@ import java.security.SecureRandom
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** A one-use, short-lived LAN form. No cookies, platform credentials or external resources. */
+/**
+ * A one-use, short-lived LAN form. The page itself carries no cookies, no external resources and
+ * nothing stored server-side; it only receives what the operator types on the phone and hands the
+ * value to [onQuery].
+ *
+ * 同一份实现服务两个表单：[Form.search]（手机输入剧名）与 [Form.sessionToken]（粘贴搜索登录态）。
+ */
 class PhoneSearchServer(
     address: String,
     private val onQuery: (String)->Unit,
     private val onExpired: ()->Unit = {},
-    ttlMillis: Long = 300_000
+    ttlMillis: Long = 300_000,
+    private val form: Form = Form.search
 ): Closeable {
+    /** 表单文案与校验：[field] 是表单字段名，[maxLength] 是字符上限，[maxBytes] 是请求体上限。 */
+    class Form(val title: String,val prompt: String,val field: String,val placeholder: String,val submit: String,val done: String,val maxLength: Int,val maxBytes: Int) {
+        companion object {
+            val search=Form("在电视上搜索","输入剧名，电视会按当前选择的漫剧或短剧分类搜索。","query","输入剧名或关键词","发送到电视","已发送到电视",80,4096)
+            val sessionToken=Form("填写搜索登录态","粘贴 App 抓到的 x-tt-token（整段 Cookie 也可以）。电视只把它用在搜索请求上，不联网核对、不上传。","token","粘贴 x-tt-token","保存到电视","已保存到电视",4096,8192)
+        }
+    }
     private val stopped=AtomicBoolean(false)
     private val consumed=AtomicBoolean(false)
     private val localAddress=InetAddress.getByName(address).also { require(it.isLoopbackAddress || it.isSiteLocalAddress) }.hostAddress
@@ -77,24 +91,24 @@ class PhoneSearchServer(
         if(stopped.get() || consumed.get() || System.nanoTime()>=deadline) return respond(socket,410,"二维码已失效，请在电视上重新打开手机输入")
         if(headers["host"]!=host || request[1] !in listOf("/$token","/$token/submit")) return respond(socket,404,"页面不存在")
         if(request[0]=="GET" && request[1]=="/$token") {
-            return respond(socket,200,"""<h1>在电视上搜索</h1><p>输入剧名，电视会按当前选择的漫剧或短剧分类搜索。</p><form method="post" action="/$token/submit"><input name="query" maxlength="80" required autofocus placeholder="输入剧名或关键词" autocomplete="off"><button>发送到电视</button></form><p>页面仅在电视的手机输入窗口打开期间有效，最长 5 分钟。</p>""")
+            return respond(socket,200,"""<h1>${form.title}</h1><p>${form.prompt}</p><form method="post" action="/$token/submit"><input name="${form.field}" maxlength="${form.maxLength}" required autofocus placeholder="${form.placeholder}" autocomplete="off"><button>${form.submit}</button></form><p>页面仅在电视的输入窗口打开期间有效，最长 5 分钟。</p>""")
         }
         if(request[0]!="POST" || request[1]!="/$token/submit") return respond(socket,405,"不支持的操作")
         if(headers["origin"]!=null && headers["origin"]!="http://$host") return respond(socket,403,"来源不匹配")
         if(headers.containsKey("transfer-encoding") || headers["content-type"]?.substringBefore(';')!="application/x-www-form-urlencoded") return respond(socket,400,"请求格式错误")
-        val length=headers["content-length"]?.toIntOrNull()?.takeIf { it in 1..4096 } ?: return respond(socket,413,"输入内容过长")
+        val length=headers["content-length"]?.toIntOrNull()?.takeIf { it in 1..form.maxBytes } ?: return respond(socket,413,"输入内容过长")
         val body=ByteArray(length); var offset=0
         while(offset<body.size) { val n=input.read(body,offset,body.size-offset); if(n<0) return; offset+=n }
         val fields=String(body,Charsets.UTF_8).split('&').map { it.split('=',limit=2) }
-        if(fields.size!=1 || fields[0].size!=2 || fields[0][0]!="query") return respond(socket,400,"请填写剧名")
+        if(fields.size!=1 || fields[0].size!=2 || fields[0][0]!=form.field) return respond(socket,400,"请填写内容后再提交")
         val query=runCatching { URLDecoder.decode(fields[0][1],"UTF-8").trim() }.getOrNull()
-        if(query.isNullOrBlank() || query.length>80 || query.any { it.isISOControl() }) return respond(socket,400,"请输入 1—80 个字符的剧名")
+        if(query.isNullOrBlank() || query.length>form.maxLength || query.any { it.isISOControl() }) return respond(socket,400,"请输入 1—${form.maxLength} 个字符")
         if(stopped.get() || System.nanoTime()>=deadline || !consumed.compareAndSet(false,true)) return respond(socket,410,"二维码已失效")
-        try { respond(socket,200,"<h1>已发送到电视</h1><p>请回到电视查看搜索结果。</p>") }
+        try { respond(socket,200,"<h1>${form.done}</h1><p>请回到电视继续。</p>") }
         finally { close(); onQuery(query) }
     }
     private fun respond(socket: Socket, code: Int, message: String) {
-        val body="""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>红果 TV · 手机输入</title><style>body{font:18px sans-serif;background:#10131b;color:#f4f5f8;max-width:500px;margin:40px auto;padding:20px}input,button{box-sizing:border-box;width:100%;font:inherit;padding:16px;margin:10px 0;border-radius:8px}button{background:#ff634c;color:white;border:0}p{line-height:1.6}</style></head><body>$message</body></html>""".toByteArray(Charsets.UTF_8)
+        val body="""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>红果 TV · ${form.title}</title><style>body{font:18px sans-serif;background:#10131b;color:#f4f5f8;max-width:500px;margin:40px auto;padding:20px}input,button{box-sizing:border-box;width:100%;font:inherit;padding:16px;margin:10px 0;border-radius:8px}button{background:#ff634c;color:white;border:0}p{line-height:1.6}</style></head><body>$message</body></html>""".toByteArray(Charsets.UTF_8)
         val header="HTTP/1.1 $code Response\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${body.size}\r\nConnection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n"
         socket.getOutputStream().apply { write(header.toByteArray(Charsets.US_ASCII)); write(body); flush() }
     }

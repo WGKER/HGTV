@@ -45,7 +45,13 @@ const home = await check("home", async () => {
 });
 for (const series of home?.series || []) {
   await check(`search:${series.id}`, async () => {
-    const d = await json("/api/search?q=" + encodeURIComponent(series.title));
+    const d = await json("/api/search?q=" + encodeURIComponent(series.title)).catch(
+      (e) => {
+        throw new Error(
+          `${e.message}（搜索优先走 App 搜索接口，匿名设备下退回官网搜索；两条路都失败请检查网络，或配置 HONGGUO_SESSION_TOKEN）`
+        );
+      }
+    );
     if (!d.items.some((s) => s.id === series.id))
       throw new Error("Search did not match the target series");
     return {

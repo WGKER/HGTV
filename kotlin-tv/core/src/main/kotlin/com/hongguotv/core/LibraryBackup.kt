@@ -8,8 +8,9 @@ import java.net.URI
 data class BackupProgress(val series: Series,val episodeId: String,val episodeIndex: Int,val position: Long,val duration: Long,val completed: Boolean,val updatedAt: Long) {
     fun json()=JSONObject().put("series",LibraryBackup.seriesJson(series)).put("episodeId",episodeId).put("episodeIndex",episodeIndex).put("position",position).put("duration",duration).put("completed",completed).put("updatedAt",updatedAt)
 }
-data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext: Boolean=true,val type: ContentType=ContentType.COMIC,val frame: VideoFrameMode=VideoFrameMode.FIT) {
-    fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name)
+data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext: Boolean=true,val type: ContentType=ContentType.COMIC,val frame: VideoFrameMode=VideoFrameMode.FIT,val danmaku: DanmakuMode=DanmakuMode.FULL,val danmakuScale: Float=1f,val danmakuAlpha: Float=1f) {
+    fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name).put("danmaku",danmaku.storedValue)
+        .put("danmakuScale",danmakuScale.toDouble()).put("danmakuAlpha",danmakuAlpha.toDouble())
 }
 data class BackupData(val favorites: List<Series>,val history: List<BackupProgress>,val watched: Set<String>,val searches: List<RecentSearch>,val settings: BackupSettings,val later: List<Series> = emptyList(),val hidden: Set<String> = emptySet())
 
@@ -76,7 +77,13 @@ object LibraryBackup {
         val autoNext=settings.get("autoNext"); require(autoNext is Boolean)
         val type=ContentType.entries.firstOrNull { it.storedValue==settings.getString("type") } ?: error("内容类型无效")
         val frame=VideoFrameMode.entries.firstOrNull { it.name==settings.getString("frame") } ?: error("画面模式无效")
-        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame),later,hiddenIds)
+        // 弹幕显示方式是后加的字段：旧备份没有它，按「全屏弹幕」处理，旧文件仍然能恢复。
+        val danmaku=if(settings.has("danmaku")) DanmakuMode.fromStored(settings.optString("danmaku")) else DanmakuMode.FULL
+        // 弹幕字号 / 透明度同样是后加字段：旧备份没有它们，按 100% 处理。
+        // 新备份里出现越界值时也不报错，直接夹进合法区间（归一由 DanmakuStyle 负责）。
+        val danmakuScale=if(settings.has("danmakuScale")) DanmakuStyle.scale(settings.get("danmakuScale").let { require(it is Number) { "弹幕字号无效" }; it.toFloat() }) else 1f
+        val danmakuAlpha=if(settings.has("danmakuAlpha")) DanmakuStyle.alpha(settings.get("danmakuAlpha").let { require(it is Number) { "弹幕透明度无效" }; it.toFloat() }) else 1f
+        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,danmaku,danmakuScale,danmakuAlpha),later,hiddenIds)
     }
     /** Existing favorites stay first; only newer imported progress replaces a local record. */
     fun merge(local: BackupData,incoming: BackupData,restoreSettings: Boolean): BackupData {

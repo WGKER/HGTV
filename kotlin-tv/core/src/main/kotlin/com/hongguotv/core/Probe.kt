@@ -2,6 +2,10 @@ package com.hongguotv.core
 
 fun main(args: Array<String>) {
     val repository=ContentRepository()
+    // 搜索接口要求登录态（匿名设备返回 200 + 空 body），联调时可用 --token <x-tt-token> 带上。
+    val tokenAt=args.indexOf("--token")
+    if(tokenAt>=0) repository.sessionToken=args.getOrNull(tokenAt+1)
+    fun keywordArg(): String? = args.withIndex().firstOrNull { (index,value) -> !value.startsWith("--") && value.isNotBlank() && index!=tokenAt+1 }?.value
     if(args.contains("--ranking")) {
         try {
             val first=repository.comicRanking()
@@ -24,12 +28,57 @@ fun main(args: Array<String>) {
         }
         return
     }
+    if(args.contains("--search")) {
+        // 搜索联调：默认「聚宝」（漫剧），也可以给关键词与 --short。
+        try {
+            val type=if(args.contains("--short")) ContentType.SHORT else ContentType.COMIC
+            val keyword=keywordArg() ?: "聚宝"
+            val seen=mutableSetOf<String>()
+            for(page in 1..6) {
+                val result=try { repository.search(keyword,page,type) } catch(problem: Exception) {
+                    println("search=$keyword type=${type.label} page=$page failed=${problem.message}")
+                    if(repository.sessionToken.isNullOrBlank()) println("   提示：App 搜索接口匿名不可用时已退回官网搜索；两条路都失败请检查网络，或用 --token <x-tt-token> 让搜索直接使用 App 接口。")
+                    break
+                }
+                val fresh=result.items.filter { seen.add(it.id) }
+                println("search=$keyword type=${type.label} page=$page items=${result.items.size} new=${fresh.size} hasMore=${result.hasMore}")
+                fresh.take(3).forEach { println("   ${it.id} ${it.title}") }
+                if(!result.hasMore) break
+            }
+        } finally {
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
+    if(args.contains("--danmaku")) {
+        // 弹幕接口联调：默认取漫剧热播榜第一部，也可以直接给剧集 ID。
+        try {
+            val seriesId=args.firstOrNull { it.matches(Regex("[0-9]{1,30}")) } ?: repository.comicRanking().items.first().id
+            val detail=repository.detail(seriesId)
+            val episode=detail.episodes.first()
+            val items=repository.danmaku(episode,detail.series.id)
+            println("danmaku series=${detail.series.title}; episodes=${detail.episodes.size}; vid=$episode; count=${items.size}")
+            println("span=${items.firstOrNull()?.offsetMs}ms..${items.lastOrNull()?.offsetMs}ms; top=${items.maxByOrNull { it.diggCount }?.diggCount}赞")
+            items.take(3).forEach { println("  ${it.offsetMs}ms [${it.diggCount}] ${it.text}") }
+        } finally {
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
     val type=if(args.contains("--comic")) ContentType.COMIC else ContentType.SHORT
     val keyword=if(type==ContentType.COMIC) "修仙" else "总裁"
-    val search=repository.search(keyword,type=type); println("search=${search.items.size}; hasMore=${search.hasMore}")
-    if(type==ContentType.COMIC && search.hasMore) {
-        val next=repository.search(keyword,2,type)
-        println("searchPage2=${next.items.size}; overlap=${search.items.map { it.id }.intersect(next.items.map { it.id }.toSet()).size}")
+    // 搜索优先走 App 搜索接口，匿名设备下退回官网搜索；两条路都失败也不打断后面的首页 / 详情 / 播放探测。
+    val search=try { repository.search(keyword,type=type) } catch(problem: Exception) {
+        println("search failed=${problem.message}")
+        if(repository.sessionToken.isNullOrBlank()) println("   提示：App 搜索接口匿名不可用时已退回官网搜索；两条路都失败请检查网络，或用 --token <x-tt-token> 让搜索直接使用 App 接口。")
+        null
+    }
+    if(search!=null) {
+        println("search=${search.items.size}; hasMore=${search.hasMore}")
+        if(type==ContentType.COMIC && search.hasMore) {
+            val next=repository.search(keyword,2,type)
+            println("searchPage2=${next.items.size}; overlap=${search.items.map { it.id }.intersect(next.items.map { it.id }.toSet()).size}")
+        }
     }
     val home=repository.home(type=type); println("type=${type.label}; home=${home.items.size}; hasMore=${home.hasMore}")
     if(type==ContentType.COMIC) {

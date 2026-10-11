@@ -9,7 +9,8 @@ def focus(name):return next(n for n in nodes(name) if n.get('focused')=='true')
 def check(label,condition):
     if not condition:raise AssertionError(label)
     checks.append(label)
-for name,prefix in [('43-final-cached-home','接着看'),('42-final-updated-shelf','收藏有更新'),('44-final-later','稍后看'),('61-final-large-horizontal','热门发现')]:
+# 首页剧架 2026-10-06 起为「历史记录 / 我的收藏 / 热门推荐 / 热门发现（+ 有内容才出现的稍后看）」，这批 XML 需按新界面重录。
+for name,prefix in [('43-final-cached-home','历史记录'),('42-final-updated-shelf','我的收藏'),('44-final-later','稍后看'),('61-final-large-horizontal','热门发现')]:
     check(name+': correct shelf focus',focus(name).get('content-desc','').startswith(prefix))
 check('update card shows added episode count','新增 3 集' in text('42-final-updated-shelf'))
 for phrase in ['直接播放','收藏这部剧','加入稍后看','查看剧集详情','不在热门推荐中显示']:

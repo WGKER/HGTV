@@ -8,6 +8,7 @@ services:
     environment:
       BRIDGE_HOST: 0.0.0.0
       BRIDGE_TOKEN: ${BRIDGE_TOKEN:-}
+      HONGGUO_SESSION_TOKEN: ${HONGGUO_SESSION_TOKEN:-}
     restart: unless-stopped
     init: true
     read_only: true

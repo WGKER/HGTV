@@ -1,4 +1,4 @@
-name: Sync native source to public update channel
+name: Sync native source to public repository
 on:
   push:
     branches: ['codex/kotlin-standalone']

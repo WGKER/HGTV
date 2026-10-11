@@ -58,4 +58,16 @@ class PhoneSearchServerTest {
             assertTrue(runCatching { request(server) }.isFailure)
         }
     }
+    /** 登录态表单复用同一个一次性页面：字段名换成 token，长口令可以提交，搜索字段名不再成立。 */
+    @Test fun `session token form takes a long token and ignores the search field name`() {
+        val received=CountDownLatch(1); var saved=""
+        PhoneSearchServer("127.0.0.1",{ saved=it;received.countDown() },form=PhoneSearchServer.Form.sessionToken).use { server ->
+            val page=request(server)
+            assertTrue(page.startsWith("HTTP/1.1 200")); assertTrue(page.contains("name=\"token\""))
+            assertTrue(request(server,"POST",URI(server.url).path+"/submit","query=abc").startsWith("HTTP/1.1 400"))
+            val value="x-tt-token="+"t".repeat(600)
+            assertTrue(request(server,"POST",URI(server.url).path+"/submit","token="+URLEncoder.encode(value,"UTF-8")).startsWith("HTTP/1.1 200"))
+            assertTrue(received.await(2,TimeUnit.SECONDS)); assertEquals(value,saved)
+        }
+    }
 }

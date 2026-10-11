@@ -227,11 +227,50 @@ class ContentRepositoryTest {
         assertEquals(1,requests)
     }
 
-    @Test fun missingComicTabDoesNotFallBackToShortResults() {
-        var requests=0
-        val repo=repository { requests++; """{"code":0,"search_tabs":[{"tab_type":11,"data":[]}]}""" }
-        assertThrows(IOException::class.java) { repo.search("修仙",1,ContentType.COMIC) }
-        assertEquals(1,requests)
+    /**
+     * App 搜索接口对匿名设备返回空响应体（HTTP 200 + 空 body），漫剧搜索因此必须能退回官网搜索，
+     * 否则「漫剧」页签下每次搜索都是一句错误提示。
+     */
+    @Test fun comicSearchFallsBackToWebsiteWhenTheAppTabIsMissing() {
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
+            paths+=request.url.encodedPath
+            if(paths.size==1) """{"code":0,"search_tabs":[{"tab_type":11,"data":[]}]}"""
+            else """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"888","series_name":"漫剧测试","episode_cnt":12}}]}}};</script>"""
+        }
+        val result=repo.search("修仙",1,ContentType.COMIC)
+        assertEquals(listOf("888"),result.items.map { it.id })
+        // 官网搜索自己只有 10 条，但后面还能从片库目录继续补，所以第 1 页不是终点。
+        assertTrue(result.hasMore)
+        assertEquals(2,paths.size)
+    }
+
+    /**
+     * 搜索第 2 页起走片库目录：官网搜索没有任何分页参数（page / page_num / offset / count 全部被忽略），
+     * App 搜索接口又对匿名设备返回空响应，能往下翻的只有分类页（24 部一页）。
+     * 这里钉住三件事：真的去读了分类页、只留下片名含关键词的剧、目录翻完就 hasMore=false。
+     */
+    @Test fun searchBeyondFirstPageScansTheCatalogAndFiltersByTitle() {
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
+            paths+=request.url.encodedPath
+            val page=request.url.queryParameter("page")
+            when {
+                // App 搜索接口：HTTP 200 + 空响应体
+                request.url.encodedPath.contains("bookapi") -> ""
+                request.url.encodedPath.contains("search") -> """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"1","series_name":"聚宝仙盆","episode_cnt":99}}]}}};</script>"""
+                page=="1" -> """<script>_ROUTER_DATA={"loaderData":{"category_$":{"recommendList":[{"series_id":"1","series_name":"聚宝仙盆"},{"series_id":"2","series_name":"别的剧"}],"pagination":{"totalPages":3}}}};</script>"""
+                page=="2" -> """<script>_ROUTER_DATA={"loaderData":{"category_$":{"recommendList":[{"series_id":"3","series_name":"聚宝仙炉"}],"pagination":{"totalPages":3}}}};</script>"""
+                else -> """<script>_ROUTER_DATA={"loaderData":{"category_$":{"recommendList":[{"series_id":"4","series_name":"聚宝仙盆第二季"}],"pagination":{"totalPages":3}}}};</script>"""
+            }
+        }
+        assertEquals(listOf("1"),repo.search("聚宝",1,ContentType.COMIC).items.map { it.id })
+        // 第 2 页一次往后扫 3 页目录：目录第 1 页的「聚宝仙盆」已经发过了，只接住新命中的两部。
+        val second=repo.search("聚宝",2,ContentType.COMIC)
+        assertEquals(listOf("3","4"),second.items.map { it.id })
+        // 目录一共 3 页，这一轮已经扫到末尾，hasMore 必须收掉：界面上的「已显示全部」才是真的。
+        assertFalse(second.hasMore)
+        assertTrue(paths.any { it.contains("/category/comic-drama") })
     }
 
     @Test fun shortSearchKeepsWebsiteFallback() {
@@ -243,5 +282,48 @@ class ContentRepositoryTest {
         }
         assertEquals("456",repo.search("短剧",1,ContentType.SHORT).items.single().id)
         assertEquals(2,paths.size)
+    }
+
+    /**
+     * 平台对匿名设备返回 HTTP 200 + 空响应体。空 body 必须先被识别成「App 搜索不可用」，
+     * 而不是直接丢给 JSONObject 抛出 `A JSONObject text must begin with '{'`——
+     * 那句异常会打断回退路径，用户看到的就只是「漫剧搜索报错无法加载」。
+     */
+    @Test fun blankAppSearchResponseFallsBackToWebsiteInsteadOfFailing() {
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
+            paths+=request.url.encodedPath
+            when {
+                // App 搜索接口：HTTP 200 + 空响应体
+                request.url.encodedPath.contains("bookapi") -> ""
+                request.url.encodedPath.contains("search") -> """<script>_ROUTER_DATA={"loaderData":{"search_(keyword)/page":{"searchList":[{"video_data":{"series_id":"777","series_name":"测试漫剧","episode_cnt":9}}]}}};</script>"""
+                else -> """<script>_ROUTER_DATA={"loaderData":{"category_$":{"recommendList":[{"series_id":"778","series_name":"修仙漫剧第二季"}],"pagination":{"totalPages":1}}}};</script>"""
+            }
+        }
+        assertEquals(listOf("777"),repo.search("修仙",1,ContentType.COMIC).items.map { it.id })
+        assertEquals(2,paths.size)
+        // 第 2 页从片库目录里接着补；接口已确认关掉之后不再空跑一次 App 搜索。
+        assertEquals(listOf("778"),repo.search("修仙",2,ContentType.COMIC).items.map { it.id })
+        assertEquals(1,paths.count { it.contains("bookapi") })
+    }
+
+    /** 可选登录态：配置后按 `x-tt-token` 发出（整段 Cookie 再补一个 `Cookie` 头），留空就保持匿名请求。 */
+    @Test fun sessionTokenIsSentAsLoginHeaderOnlyWhenConfigured() {
+        val requests=mutableListOf<Request>()
+        val repo=repository { request ->
+            requests+=request
+            JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(19,"999"))).toString()
+        }
+        repo.search("修仙",1,ContentType.COMIC)
+        assertNull(requests.last().header("x-tt-token"))
+        assertNull(requests.last().header("Cookie"))
+        repo.sessionToken=" token-value "
+        repo.search("修仙",1,ContentType.COMIC)
+        assertEquals("token-value",requests.last().header("x-tt-token"))
+        assertNull(requests.last().header("Cookie"))
+        repo.sessionToken="sessionid=abc;uid=1"
+        repo.search("修仙",1,ContentType.COMIC)
+        assertEquals("sessionid=abc;uid=1",requests.last().header("x-tt-token"))
+        assertEquals("sessionid=abc;uid=1",requests.last().header("Cookie"))
     }
 }

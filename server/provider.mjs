@@ -3,6 +3,29 @@ import vm from "node:vm";
 import crypto from "node:crypto";
 import axios from "axios";
 
+// 搜索登录态（可选）：App 搜索接口对匿名设备返回 HTTP 200 + 空响应体，此时会退回官网搜索。
+// 把 App 抓到的 x-tt-token（整段 Cookie 也可以）配到 HONGGUO_SESSION_TOKEN，
+// App 搜索接口就会按登录态返回数据（结果更全、按内容类型分 tab、可翻页）。
+const sessionToken = (process.env.HONGGUO_SESSION_TOKEN || "").trim();
+const sessionHeaders = sessionToken
+  ? {
+      "x-tt-token": sessionToken,
+      ...(sessionToken.includes("=") ? { Cookie: sessionToken } : {}),
+    }
+  : {};
+/** 只给 App 搜索接口补登录态；播放地址解析等请求保持原样。 */
+function upstream(config) {
+  const client = axios.create(config);
+  const attach = (url, options) =>
+    !sessionHeaders["x-tt-token"] || !String(url).includes("/reading/bookapi/")
+      ? options
+      : { ...options, headers: { ...(options.headers || {}), ...sessionHeaders } };
+  const call = (url, options = {}) => client(url, attach(url, options));
+  call.post = (url, body, options = {}) =>
+    client.post(url, body, attach(url, options));
+  return call;
+}
+
 // Trusted, pinned GPL source. This is a compatibility wrapper, not a sandbox for user scripts.
 const source = fs.readFileSync(
   new URL("./vendor/hongguo.cjs", import.meta.url),
@@ -16,7 +39,7 @@ const context = vm.createContext({
   Buffer,
   URL,
   URLSearchParams,
-  axios: axios.create({
+  axios: upstream({
     maxContentLength: 16 * 1024 * 1024,
     maxBodyLength: 1024 * 1024,
   }),
@@ -52,11 +75,12 @@ export const provider = {
     return { items: cards(pageData.recommendList.map(api.itemToCard)), page };
   },
   async search(keyword, page = 1) {
+    // 先走 App 搜索接口：它按内容类型分 tab、也能翻页，配置 HONGGUO_SESSION_TOKEN 后即可用。
     try {
       const result = await api.appSearchPage(keyword, 11, page, 20);
       if (result.list.length) return { items: cards(result.list), page };
     } catch {
-      /* Website fallback; failure below remains an error, never an empty success. */
+      /* 匿名设备该接口返回空响应体；退回官网搜索，失败在下文如实报错，绝不返回空列表当成功。 */
     }
     const data = await api.routerData(
       `${SITE}/search/${encodeURIComponent(keyword)}?page=${page}`

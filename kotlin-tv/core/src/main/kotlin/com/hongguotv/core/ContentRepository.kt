@@ -27,8 +27,35 @@ class SearchSessionExpiredException: IOException("搜索结果已过期，请从
 class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
     private val signer = Signer()
     private val site = "https://hongguoduanju.com"
+    private data class DanmakuPage(val items: List<Danmaku>,val nextStart: Long,val cursor: String,val hasMore: Boolean)
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
+    /**
+     * 搜索已经给过界面的剧集 id（按「类型 + 关键词」分组）。
+     *
+     * 官网搜索与片库目录会重复给出同一部剧（同一部剧的不同季、目录分页本身也会重复），
+     * 这里替界面记住已经发过的条目，后面补页时只回新片名；
+     * 一组补页里一个新条目都没有，就说明这个关键词在片库里已经找完了。
+     */
+    private val catalogSeen=linkedMapOf<String,MutableSet<String>>()
+    private fun catalogKey(type: ContentType,keyword: String)="${type.storedValue}:$keyword"
+    /**
+     * App 搜索接口还能不能用：空响应体说明平台对匿名设备已经不给数据了（实测所有线路、多组设备参数都一样）。
+     * null = 还没试过。只有确认它「活着或未知」时才按游标过期处理漫剧翻页，
+     * 否则漫剧搜索会卡在第 1 页，永远走不到官网搜索 + 片库目录补页那条路。
+     */
+    @Volatile private var appSearchAlive: Boolean?=null
+    /**
+     * 搜索登录态（可选）：App 搜索接口对匿名设备返回空响应体，带上 App 抓到的 `x-tt-token`
+     * 后它会按该账号返回数据（第 1 页起就是完整结果，不再依赖官网搜索与片库目录）。
+     * 留空时按匿名设备请求，搜索仍然可用——退回官网搜索 + 片库目录补页。
+     */
+    @Volatile var sessionToken: String?=null
+    /**
+     * 弹幕接口是播放器接口，走 App 域名（与搜索 / 详情同一套设备参数）。
+     * 站点有多条线路，单条失败时依次换线，最后一条仍失败才放弃本窗口。
+     */
+    private val commentHosts=listOf("api5-normal-sinfonlinea.fqnovel.com","api5-normal-sinfonlinec.fqnovel.com","api5-normal-sinfonlineb.fqnovel.com","api5-normal-lf.fqnovel.com","api5-normal-lq.fqnovel.com","api5-normal-hl.fqnovel.com")
     private fun text(url: String, signed: Signer.Request? = null): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
@@ -42,6 +69,24 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
             if(bytes.size > 16*1024*1024) throw IOException("内容响应过大")
             String(bytes,Charsets.UTF_8)
         }
+    }
+    /** 搜索 / 弹幕这类 App 接口共用的设备参数：与播放器版本对齐，避免平台按旧版本拒绝。 */
+    private fun appValues(): LinkedHashMap<String,String> {
+        val values=VendorConstants.device.toMutableMap()
+        for(key in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[key]="72232"
+        values["version_name"]="7.2.2.32"
+        return LinkedHashMap(values)
+    }
+    /**
+     * 给搜索请求补上登录态。平台对匿名设备返回空响应体，只有带上登录口令才有数据；
+     * 直接粘贴整段 Cookie（形如 `sessionid=…`）时同时按 `Cookie` 头发一次。
+     */
+    private fun Signer.Request.withSession(): Signer.Request {
+        val token=sessionToken?.trim().orEmpty()
+        if(token.isEmpty()) return this
+        val extra=linkedMapOf("x-tt-token" to token)
+        if(token.contains('=')) extra["Cookie"]=token
+        return copy(headers=headers+extra)
     }
     private fun router(url: String) = extractRouter(text(url)).getJSONObject("loaderData")
     private fun card(item: JSONObject): Series {
@@ -65,35 +110,104 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val lastPage=section.optJSONObject("pagination")?.optInt("totalPages",100) ?: 100
         return CatalogPage(items,items.isNotEmpty() && page<minOf(lastPage,100))
     }
+    /**
+     * 搜索：先走 App 搜索接口，拿不到数据时退回官网搜索。
+     *
+     * App 搜索接口 `POST /reading/bookapi/search/tab/v` 是唯一按内容类型分 tab、也唯一能翻页的入口
+     * （第 2 页起带 `search_id` / `passback` / `next_offset`），所以它优先；配置 [sessionToken] 时
+     * 它会按登录态返回数据，匿名设备则一律返回 HTTP 200 + 空响应体。
+     *
+     * 接口不可用时退回：第 1 页读官网搜索（`/search/{kw}`：一次只给约 10 条、忽略所有分页参数），
+     * 第 2 页起从片库目录里筛片名含关键词的剧。搜索结果过期要如实抛出，
+     * 让界面回到第 1 页重新搜，而不是拿官网的前 10 条顶替。
+     */
     fun search(keyword: String, page: Int = 1, type: ContentType = ContentType.SHORT): CatalogPage {
         require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
-        // The website search does not constrain content type. Never use it for comics.
-        if(type==ContentType.COMIC) return appSearch(keyword,page,type)
-        try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; /* Website fallback for short dramas only. */ }
-        val data=router("$site/search/${Signer.encode(keyword)}?page=$page")
+        // 第 1 页总会试一次（平台恢复时能自动接回来）；后面几页在确认接口已关掉之后就不再空跑。
+        if(page==1 || appSearchAlive!=false) {
+            try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e }
+        }
+        return if(page==1) websiteSearch(keyword,type) else catalogSearch(keyword,page,type)
+    }
+    /**
+     * 官网搜索：一次只给前 10 条，而且**没有任何分页参数**
+     * （`page` / `page_num` / `offset` / `page_size` / `count` 全部被服务端忽略，实测同一批结果）。
+     * 所以它只负责第 1 页：相关度最高的那几条，后面继续加载的内容由 [catalogSearch] 从片库目录里补。
+     */
+    private fun websiteSearch(keyword: String,type: ContentType): CatalogPage {
+        val data=router("$site/search/${Signer.encode(keyword)}?page=1")
         val section=data.optJSONObject("search_(keyword)/page") ?: data.optJSONObject("search_page") ?: throw IOException("搜索数据暂不可用")
         val rows=section.optJSONArray("searchList") ?: throw IOException("搜索数据结构已变化")
         val items=valid(rows.objects().map(::card))
-        return CatalogPage(items,items.isNotEmpty() && page<100)
+        // 第 1 页开一次新的「已发过」名单：重新搜同一个词就是重新开始。
+        synchronized(catalogSeen) {
+            if(catalogSeen.size>=20) catalogSeen.keys.firstOrNull()?.let(catalogSeen::remove)
+            catalogSeen[catalogKey(type,keyword)]=items.map { it.id }.toMutableSet()
+        }
+        // 空结果不是错误：搜索页自己会显示「没有找到相关…，换个关键词试试」。
+        // hasMore 交给片库目录决定（下面每次都会真的去查，所以这里先给 true）。
+        return CatalogPage(items,true)
+    }
+    /**
+     * 搜索的第 2 页起：从片库目录（官网分类页）里筛出片名带关键词的剧。
+     *
+     * 官网搜索没有分页、App 搜索接口对匿名设备返回空响应，能往下翻的只有分类页（24 部一页、34 页）。
+     * 每次往后扫 [SEARCH_SCAN_PAGES] 页，把命中的片名接在搜索结果后面；
+     * 目录翻完就 hasMore=false，界面上的「已显示全部 N 部」就是真的到头了。
+     */
+    private fun catalogSearch(keyword: String,page: Int,type: ContentType): CatalogPage {
+        val start=1+(page-2)*SEARCH_SCAN_PAGES
+        val items=mutableListOf<Series>()
+        var total=0
+        for(offset in 0 until SEARCH_SCAN_PAGES) {
+            val index=start+offset
+            if(index>MAX_CATALOG_PAGE || (total>0 && index>total)) break
+            val (matched,pages)=catalogPage(keyword,index,type)
+            total=pages
+            items+=matched
+        }
+        // 只回界面还没见过的条目；一个新条目都没有时只再给一次机会（第 2 页），
+        // 之后就把 hasMore 收掉——否则关键词在片库里只有两三条时，用户会一直往下滚却什么都没有。
+        val seen=synchronized(catalogSeen) { catalogSeen.getOrPut(catalogKey(type,keyword)) { mutableSetOf() } }
+        val fresh=synchronized(catalogSeen) { items.distinctBy { it.id }.filter { seen.add(it.id) } }
+        val morePagesLeft=total>0 && start+SEARCH_SCAN_PAGES<=total
+        return CatalogPage(fresh,morePagesLeft && (fresh.isNotEmpty() || page<=2))
+    }
+    /** 片库目录第 [index] 页里片名含 [keyword] 的剧，外加这本目录一共多少页。 */
+    private fun catalogPage(keyword: String,index: Int,type: ContentType): Pair<List<Series>,Int> {
+        val path=if(type==ContentType.COMIC) "comic-drama" else "real-drama"
+        val data=router("$site/category/$path?page=$index")
+        val section=data.optJSONObject("category_$") ?: throw IOException("片库目录暂不可用")
+        val rows=section.optJSONArray("recommendList") ?: throw IOException("片库目录结构已变化")
+        val total=section.optJSONObject("pagination")?.optInt("totalPages",1) ?: 1
+        val needle=keyword.filterNot(Char::isWhitespace)
+        val matched=valid(rows.objects().map(::card)).filter { it.title.filterNot(Char::isWhitespace).contains(needle,ignoreCase=true) }
+        return matched to minOf(total,MAX_CATALOG_PAGE)
     }
     private fun appSearch(keyword: String, page: Int, type: ContentType): CatalogPage {
-        val values=VendorConstants.device.toMutableMap()
-        for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
-        values["version_name"]="7.2.2.32"
+        val values=appValues()
         values.putAll(linkedMapOf("query" to keyword,"count" to "20","offset" to ((page-1)*20).toString(),"tab_type" to type.searchTab.toString(),"bookshelf_search_plan" to "4","use_correct" to "true","user_is_login" to "0"))
         val cursor=synchronized(searchCursors) {
             val now=clock()
             searchCursors.entries.removeAll { now-it.value.updatedAt>300000 || (page==1 && it.key.first==type && it.key.second==keyword) }
             searchCursors[Triple(type,keyword,page-1)]
         }
-        if(type==ContentType.COMIC && page>1 && cursor==null) throw SearchSessionExpiredException()
+        // 漫剧翻页必须带上一页的游标。接口已经被平台关掉（空响应体）时不再抛「搜索结果已过期」：
+        // 那样会把漫剧搜索钉死在第 1 页，走不到下面的官网搜索 + 片库目录补页。
+        if(type==ContentType.COMIC && page>1 && cursor==null && appSearchAlive!=false) throw SearchSessionExpiredException()
         cursor?.let {
             if(it.searchId.isNotBlank()) values["search_id"]=it.searchId
             if(it.passback.isNotBlank()) values["passback"]=it.passback
             it.offset?.takeIf { offset -> offset>=0 }?.let { offset -> values["offset"]=offset.toString() }
         }
         val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/tab/v",values)
-        val data=JSONObject(text(signed.url,signed))
+        val raw=text(signed.url,signed.withSession())
+        // 平台对匿名设备返回 HTTP 200 + 空响应体，这里必须先判空：
+        // 直接丢给 JSONObject 会抛 JSONException（A JSONObject text must begin with '{'），
+        // 那既不是可读的错误，也会把「App 搜索不可用、改用官网搜索」这条回退路径打断。
+        if(raw.isBlank()) { appSearchAlive=false; throw IOException("App 搜索接口暂无响应") }
+        appSearchAlive=true
+        val data=JSONObject(raw)
         if(data.optInt("code",-1)!=0) throw IOException("搜索接口暂不可用")
         val tabs=data.optJSONArray("search_tabs") ?: data.optJSONObject("data")?.optJSONArray("search_tabs") ?: throw IOException("搜索格式异常")
         val tab=tabs.objects().firstOrNull { it.optInt("tab_type")==type.searchTab } ?: throw IOException("${type.label}搜索暂不可用")
@@ -150,7 +264,97 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val quality=if(selected.first>0) "${selected.first}P"+(if(selected.first>maxQuality) "（兼容资源）" else "") else "自动"
         return StreamInfo(url,key,quality)
     }
+    /**
+     * 取一集的弹幕，也就是「原 App」播放时看到的同一份数据。
+     *
+     * 接口是播放器自己的评论接口：`POST /novel/commentapi/comment/list/{vid}/v1/`，
+     * 请求体带 `comment_source=601`（短剧）、`server_channel=1000`、`group_type=30`、`comment_type=20`，
+     * `business_param` 里再给剧集 ID 与本集时长；响应按 30 秒一个窗口返回，
+     * `extra.next_query_danmaku_list_time` 是下一个窗口的起点，`common_list_info.has_more` 表示还没到片尾。
+     *
+     * [durationSeconds] 是这一集的时长（秒），用来判断何时停：为 0 时按窗口数量上限兜底。
+     * [onWindow] 每拉到一个窗口就被回调一次（传当前已收集的全部弹幕，按时间排好），
+     * 让播放界面边拉边画：整集拉完要十几秒，等全量再上屏等于前十几秒一条弹幕都没有。
+     * 回调跑在调用线程上，调用方自己负责切回主线程。
+     * 网络失败或平台不再返回弹幕时返回空列表，播放界面不显示任何弹幕，也不弹错误。
+     */
+    fun danmaku(vid: String, seriesId: String, durationSeconds: Long = 0, shouldStop: () -> Boolean = { false }, onWindow: (List<Danmaku>) -> Unit = {}): List<Danmaku> {
+        require(vid.matches(Regex("[0-9]{1,30}")) && seriesId.matches(Regex("[0-9]{1,30}")))
+        val durationMs=(durationSeconds.coerceIn(0,4*60*60))*1000
+        val collected=linkedMapOf<String,Danmaku>()
+        var startMs=0L
+        var cursor=""
+        // 知道时长就按时长算窗口；不知道时先按上限走——平台的 has_more 会在片尾自己翻成 false，
+        // 所以「先多要几个窗口」不会把整部剧拉下来，只是让长剧也能取全。
+        val planned=if(durationMs>0) (durationMs+COMMENT_WINDOW_MS-1)/COMMENT_WINDOW_MS+4L else MAX_DANMAKU_WINDOWS.toLong()
+        val windows=planned.coerceIn(1L,MAX_DANMAKU_WINDOWS.toLong()).toInt()
+        for(index in 0 until windows) {
+            if(shouldStop()) break
+            val page=runCatching { commentWindow(vid,seriesId,durationMs,startMs,cursor) }.getOrNull() ?: break
+            var added=false
+            page.items.forEach { if(collected.putIfAbsent("${it.offsetMs}:${it.text}",it)==null) added=true }
+            if(added) onWindow(collected.values.sortedBy { it.offsetMs })
+            if(collected.size>=MAX_DANMAKU) break
+            if(page.nextStart<=startMs) break
+            if(durationMs>0 && page.nextStart>=durationMs) break
+            if(durationMs<=0 && !page.hasMore) break
+            startMs=page.nextStart; cursor=page.cursor
+            // 弹幕接口对匿名设备有频控：连发会返回风控错误，窗口之间留一点间隔。
+            if(index<windows-1) runCatching { Thread.sleep(COMMENT_THROTTLE_MS) }
+        }
+        return collected.values.sortedBy { it.offsetMs }
+    }
+    /** 一个 30 秒窗口的弹幕；所有线路都失败时抛 IOException，由 [danmaku] 决定是继续还是停下。 */
+    private fun commentWindow(vid: String,seriesId: String,durationMs: Long,startMs: Long,cursor: String): DanmakuPage {
+        val body=JSONObject()
+            .put("comment_source",COMMENT_SOURCE).put("server_channel",SERVER_CHANNEL)
+            .put("group_id",vid).put("group_type",30).put("comment_type",20).put("sort",1)
+            .put("business_param",JSONObject().put("book_id",seriesId).put("start_offset_time",startMs)
+                .put("playlet_item_duration",durationMs)
+                .put("need_danmaku_guide_type",JSONArray(listOf(1,3,4,2))))
+            .put("count",COMMENT_COUNT).put("cursor",cursor).put("aid",8662).put("compliance_status",0)
+            .toString().toByteArray(Charsets.UTF_8)
+        var failure: IOException?=null
+        for(host in commentHosts) {
+            try {
+                val signed=signer.sign("https://$host/novel/commentapi/comment/list/$vid/v1/",appValues(),body)
+                val headers=signed.headers.toMutableMap()
+                // 这三个头是弹幕接口专用的，签名与普通接口共用同一套 App 参数。
+                headers["comment-source"]=COMMENT_SOURCE.toString()
+                headers["server-channel"]=SERVER_CHANNEL.toString()
+                headers["x-ss-stub"]=""
+                val raw=text(signed.url,Signer.Request(signed.url,headers,body))
+                if(raw.isBlank()) throw IOException("弹幕接口暂无响应")
+                val data=JSONObject(raw)
+                if(data.optInt("code",-1)!=0) throw IOException("弹幕接口暂不可用（${data.optInt("code")}）")
+                val payload=data.optJSONObject("data") ?: throw IOException("弹幕数据为空")
+                val items=parseDanmakuRows(payload.optJSONArray("data_list"))
+                val info=payload.optJSONObject("common_list_info")
+                val next=payload.optJSONObject("extra")?.optLong("next_query_danmaku_list_time",-1L)?.takeIf { it>startMs }
+                    ?: (startMs+COMMENT_WINDOW_MS)
+                return DanmakuPage(items,next,info?.str("cursor").orEmpty(),info?.optBoolean("has_more",false) ?: false)
+            } catch(e: Exception) {
+                failure=e as? IOException ?: IOException(e.message ?: "弹幕请求失败")
+            }
+        }
+        throw failure ?: IOException("弹幕接口暂不可用")
+    }
     companion object {
+        /** 弹幕窗口固定 30 秒一个，与平台的 `next_query_danmaku_list_time` 一致。 */
+        private const val COMMENT_WINDOW_MS=30_000L
+        private const val COMMENT_SOURCE=601
+        private const val SERVER_CHANNEL=1000
+        private const val COMMENT_COUNT=90
+        /** 一集最多拉多少个窗口（按 30 秒一窗，40 窗 = 20 分钟）。 */
+        private const val MAX_DANMAKU_WINDOWS=40
+        /** 一集最多保留多少条弹幕：低端电视的绘制预算，超出直接截断。 */
+        private const val MAX_DANMAKU=3000
+        /** 搜索第 2 页起每次往后扫几页片库目录（一页 24 部）。 */
+        private const val SEARCH_SCAN_PAGES=3
+        /** 片库目录最多翻到第几页。 */
+        private const val MAX_CATALOG_PAGE=100
+        /** 窗口之间的最小间隔，避开平台的弹幕频控。 */
+        private const val COMMENT_THROTTLE_MS=180L
         fun extractRouter(html: String): JSONObject {
             val marker=html.indexOf("_ROUTER_DATA"); if(marker<0) throw IOException("页面没有内容数据")
             val first=html.indexOf('{',marker); if(first<0) throw IOException("页面数据格式错误")

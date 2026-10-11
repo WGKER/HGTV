@@ -20,10 +20,13 @@ docker compose --env-file .env -f server/compose.yaml ps
 BRIDGE_BIND_IP=0.0.0.0
 BRIDGE_PORT=8787
 BRIDGE_TOKEN=
+HONGGUO_SESSION_TOKEN=
 HONGGUOTV_VERSION=0.1.1
 ```
 
 `BRIDGE_TOKEN` 留空表示不启用口令，填入值后电视端也应填写相同口令；不要提交实际 `.env`。`BRIDGE_BIND_IP` 控制宿主机监听网卡，默认开放宿主机各网卡；可填宿主机家庭网络地址。`BRIDGE_PORT` 是电视访问的宿主机端口，容器内始终为 8787。`HONGGUOTV_VERSION` 仅供下面的预构建镜像模式使用。
+
+`HONGGUO_SESSION_TOKEN` 是搜索登录态（可选）：不配置时搜索退回官网搜索 + 片库目录（匿名设备下 App 搜索接口返回 HTTP 200 + 空响应体）；配置 App 抓到的 `x-tt-token`（整段 Cookie 也可以）后，App 搜索接口按登录态返回数据，搜索第 1 页起直接用它。它只用于搜索请求，其他接口不受影响。
 
 ## 使用 GitHub 预构建镜像
 

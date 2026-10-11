@@ -18,12 +18,20 @@ class Library(context: Context) {
     private companion object {
         // A replacement Activity must not load before its predecessor's final checkpoint commits.
         val retiredWrites = mutableListOf<LatestWriteQueue<String, () -> Any?>>()
+        /**
+         * 静态列表只保留最近几次关闭的队列。
+         * 它存在的意义只是「下一个 Activity 启动时等上一批提交落盘」，
+         * 不设上限就会随 Activity 重建次数一直增长（每条队列还带着自己的线程与待写快照）。
+         */
+        const val RETIRED_LIMIT = 4
     }
     private val app = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private val loader = Executors.newSingleThreadExecutor { task -> Thread(task, "hongguotv-library-load") }
     private val prefs by lazy { app.getSharedPreferences("native-library-v1", Context.MODE_PRIVATE) }
     private val homePrefs by lazy { app.getSharedPreferences("native-home-cache-v1", Context.MODE_PRIVATE) }
+    /** 搜索登录态单独存一个文件：它不是播放偏好，也不进备份文件、不随记录一起迁移。 */
+    private val sessionPrefs by lazy { app.getSharedPreferences("native-session-v1", Context.MODE_PRIVATE) }
     private val writes = LatestWriteQueue<String, () -> Any?>("hongguotv-library-write", write = { batch -> commit(prefs, batch) },
         failed = { Log.w("HongguoTV", "Local library commit failed; pending changes retained for retry") })
     private val homeWrites = LatestWriteQueue<String, () -> Any?>("hongguotv-home-write", write = { batch -> commit(homePrefs, batch) },
@@ -150,6 +158,15 @@ class Library(context: Context) {
     var maxQuality: Int
         get() = state().settings.quality
         set(value) { val next = PlaybackQuality.normalize(value); if (next != maxQuality) { state().settings = state().settings.copy(quality = next); put("quality", next) } }
+    /**
+     * 搜索登录态（可选，App 抓到的 `x-tt-token`，整段 Cookie 也可以）。
+     *
+     * 不填也能搜索（退回官网搜索 + 片库目录补页）；填上后搜索直接使用 App 搜索接口。
+     * 它只用于搜索请求，不进备份文件，也不参与「手机备份与恢复」。
+     */
+    var searchToken: String
+        get() = sessionPrefs.getString("x-tt-token", "").orEmpty()
+        set(value) { sessionPrefs.edit().putString("x-tt-token", value.trim()).apply() }
     var autoNext: Boolean
         get() = state().settings.autoNext
         set(value) { if (value != autoNext) { state().settings = state().settings.copy(autoNext = value); put("autoNext", value) } }
@@ -162,13 +179,26 @@ class Library(context: Context) {
     var frameMode: VideoFrameMode
         get() = state().settings.frame
         set(value) { if (value != frameMode) { state().settings = state().settings.copy(frame = value); put("frameMode", value.name) } }
+    var danmakuMode: DanmakuMode
+        get() = state().settings.danmaku
+        set(value) { if (value != danmakuMode) { state().settings = state().settings.copy(danmaku = value); put("danmakuMode", value.storedValue) } }
+    /** 弹幕字号缩放：1f = 原始大小，滑动条按 [DanmakuStyle.SCALE_STEP] 增减。 */
+    var danmakuScale: Float
+        get() = state().settings.danmakuScale
+        set(value) { val next = DanmakuStyle.scale(value); if (next != danmakuScale) { state().settings = state().settings.copy(danmakuScale = next); put("danmakuScale", next) } }
+    /** 弹幕文字不透明度：1f = 完全不透明，最低 [DanmakuStyle.ALPHA_MIN]。 */
+    var danmakuAlpha: Float
+        get() = state().settings.danmakuAlpha
+        set(value) { val next = DanmakuStyle.alpha(value); if (next != danmakuAlpha) { state().settings = state().settings.copy(danmakuAlpha = next); put("danmakuAlpha", next) } }
     fun snapshot() = state().snapshot()
     fun restore(incoming: BackupData, restoreSettings: Boolean) {
         val merged = LibraryBackup.merge(snapshot(), incoming, restoreSettings)
         index = LibraryIndex(merged, state().updates())
         persist("favorites", "later", "progress", "watched", "hidden", "searches", "favoriteUpdates")
         writes.submit(mapOf("quality" to { merged.settings.quality }, "playbackSpeed" to { merged.settings.speed },
-            "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue }, "frameMode" to { merged.settings.frame.name }))
+            "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue },
+            "frameMode" to { merged.settings.frame.name }, "danmakuMode" to { merged.settings.danmaku.storedValue },
+            "danmakuScale" to { merged.settings.danmakuScale }, "danmakuAlpha" to { merged.settings.danmakuAlpha }))
         flush()
     }
     /** Requests prompt background commit, without lifecycle-thread disk waits. */
@@ -182,6 +212,7 @@ class Library(context: Context) {
         synchronized(retiredWrites) {
             writes.close(); homeWrites.close()
             retiredWrites += writes; retiredWrites += homeWrites
+            while (retiredWrites.size > RETIRED_LIMIT) retiredWrites.removeAt(0)
         }
     }
     private fun commit(target: SharedPreferences, values: Map<String, () -> Any?>): Boolean {
