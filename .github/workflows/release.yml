@@ -51,6 +51,7 @@ jobs:
         id: diff
         env:
           BEFORE_SHA: ${{ github.event.before }}
+          GRADLE_FILE: android/app/build.gradle.kts
         run: |
           set -euo pipefail
           # 上一次推送前的提交；新分支或手动触发时回落到 HEAD~1
@@ -67,7 +68,19 @@ jobs:
             exit 0
           fi
           echo "比对基准：$previous"
-          git show "$previous:android/app/build.gradle.kts" > /tmp/previous-build.gradle.kts
+
+          # 这个文件在历史里换过位置（早期在 kotlin-tv/ 下），逐个候选路径找出来
+          old_file=""
+          for candidate in "$GRADLE_FILE" "kotlin-tv/app/build.gradle.kts"; do
+            if git cat-file -e "${previous}:${candidate}" 2>/dev/null; then old_file="$candidate"; break; fi
+          done
+          if [ -z "$old_file" ]; then
+            echo "基准提交里没有找到 build.gradle.kts，视为版本已变动。"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "基准文件：$old_file"
+          git show "${previous}:${old_file}" > /tmp/previous-build.gradle.kts
           export HGTV_GRADLE_FILE=/tmp/previous-build.gradle.kts
           old_version="$(tools/version.sh version)"
           old_code="$(tools/version.sh code)"
