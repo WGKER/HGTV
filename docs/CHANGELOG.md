@@ -2,6 +2,24 @@
 
 按版本倒序。本文件合并了此前 `README.md` 的版本说明与 16 份 `RELEASE_*.md` 详细发布记录，构建、使用与验证边界见 [README](../README.md)。
 
+## 1.0.2：应用内「开源许可」补上派生来源
+
+1.0.1 之后的小版本。只有一处用户可见改动：设置 → 开源许可弹窗补上派生来源那一行。
+
+- 弹窗原先只写「源码与许可证」与「内容协议与加密处理移植自 drpys」，没有提本仓库派生自
+  `N3urda/hongguoTV`；`NOTICE.md` 第 1 节有这一条，两边对不上。
+- 现在补两行：`派生自 N3urda/hongguoTV（GPL-3.0），自 2026-10-06 起在上游基础上修改；`
+  与 `上游著作权归其作者，逐项改动见 NOTICE.md 与 docs/CHANGELOG.md。`
+- `licenseText()` 的注释同步写明「派生来源这一条与 `NOTICE.md` 第 1 节一一对应」，
+  避免以后只改一边。
+- 版本号与版本 code 同步自增：`versionName 1.0.1 → 1.0.2`、`versionCode 25 → 26`。
+- 产物：`HGTV_1.0.2.apk`。签名与 1.0.1 相同，可直接覆盖安装，本机收藏 / 进度 / 设置保留。
+
+本版验证：`./android/gradlew -p android :core:test` 136 项（失败 0、跳过 2）、`:app:lintDebug` 无 error、
+`:app:assembleDebug` 通过；反编 debug 包 dex 核对四段文案都在包内。
+
+---
+
 ## 1.0.1：发布流水线收敛，去掉重复的验证工作流
 
 1.0.0 之后的小版本。功能与 1.0.0 相同，只调整仓库里的 CI：**删掉 `.github/workflows/kotlin-native.yml`**。

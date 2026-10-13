@@ -2095,14 +2095,21 @@ class MainActivity: Activity() {
     /**
      * 「开源许可」弹窗正文。
      *
-     * 信息按当前仓库写：源码仓库、GPL-3.0-only 的许可范围、第三方来源（对照 `NOTICE.md`），
-     * 以及本机记录的边界。发布地址指向本仓库的 Releases，不再引用已经不存在的公开镜像仓库。
+     * 信息按当前仓库写：派生来源、源码仓库、GPL-3.0-only 的许可范围、第三方来源
+     * （对照 `NOTICE.md`），以及本机记录的边界。发布地址指向本仓库的 Releases，
+     * 不再引用已经不存在的公开镜像仓库。
+     *
+     * **派生来源这一条与 `NOTICE.md` 第 1 节一一对应**：fork 关系、GPL-3.0 派生、
+     * 自 2026-10-06 起在上游基础上修改、上游著作权归其作者。改 `NOTICE.md` 时同步改这里。
      */
     private fun licenseText(): String = listOf(
         "红果TV ${BuildConfig.VERSION_NAME} · GPL-3.0-only",
         "",
         "源码与许可证：github.com/pan8664716/HGTV",
         "  许可证全文见 LICENSE，第三方声明见 NOTICE.md",
+        "",
+        "派生自 N3urda/hongguoTV（GPL-3.0），自 2026-10-06 起在上游基础上修改；",
+        "  上游著作权归其作者，逐项改动见 NOTICE.md 与 docs/CHANGELOG.md。",
         "",
         "内容协议与加密处理移植自 drpys（commit 22261ad，GPL-3.0）。",
         "",
