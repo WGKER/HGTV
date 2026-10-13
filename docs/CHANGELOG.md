@@ -2,6 +2,23 @@
 
 按版本倒序。本文件合并了此前 `README.md` 的版本说明与 16 份 `RELEASE_*.md` 详细发布记录，构建、使用与验证边界见 [README](../README.md)。
 
+## 1.0.1：发布流水线收敛，去掉重复的验证工作流
+
+1.0.0 之后的小版本。功能与 1.0.0 相同，只调整仓库里的 CI：**删掉 `.github/workflows/kotlin-native.yml`**。
+
+- 该工作流与 `release.yml` 里的构建步骤完全重复：它同样跑 `:core:test :app:lintDebug :app:assembleDebug`，
+  只是把 debug APK 与测试报告传成 artifact。`release.yml` 已经在打正式包时跑 `:core:test :app:lintRelease
+  :app:assembleRelease` 并建 Release，测试与 lint 覆盖更全。
+- 但它的 `on` 里有 `tags: ['v*']`，而 `release.yml` 用 `gh release create` 建 tag，会再触发一次同样的构建——
+  一次发布白跑一遍 CI，且上传的 debug artifact 与正式包无关。
+- 删掉之后：推送 `main` 只跑 `release.yml` 一条流水线（版本比对 → 打包 → 建 Release），
+  验证仍由同一 job 内的单元测试与 lint 承担。
+- 版本号与版本 code 同步自增：`versionName 1.0.0 → 1.0.1`、`versionCode 24 → 25`（发布流水线要求两者同时变动）。
+- 产物：`HGTV_1.0.1.apk`。签名与 1.0.0 相同，可直接覆盖安装，本机收藏 / 进度 / 设置保留。
+- README 的下载示例与更新说明同步到 1.0.1（1.0.0 条目里「应用内没有检查更新入口」的说法已过期）。
+
+---
+
 ## 1.0.0：首个正式版
 
 第一个正式发布版本。应用名「红果TV」，包名 `com.hgtv.star`，versionCode 24，最低 API 26 / 目标 API 36。
