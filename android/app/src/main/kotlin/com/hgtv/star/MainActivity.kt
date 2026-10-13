@@ -309,6 +309,8 @@ class MainActivity: Activity() {
     private lateinit var library: Library
     private lateinit var tvTools: TvTools
     private lateinit var mediaSession: TvMediaSession
+    /** 应用内更新：前台空闲时检查新版，下载校验后交给系统安装器。 */
+    private lateinit var appUpdater: AppUpdater
     private val sleepTimer=SleepTimer { android.os.SystemClock.elapsedRealtime() }
     private var sleepStopped=false
     private var playerView: PlayerView?=null
@@ -596,6 +598,10 @@ class MainActivity: Activity() {
         connectivity=getSystemService(ConnectivityManager::class.java)
         runCatching { connectivity.registerDefaultNetworkCallback(networkCallback); networkRegistered=true }
         favoriteMonitor=FavoriteMonitor(library,repository) { refreshFavoriteLabels() }
+        appUpdater=AppUpdater(this) {
+            // 「空闲」= 在前台、不在播放界面、没有模态框。播放中与弹窗里绝不打扰。
+            foreground && screen!="player" && !tvTools.showing
+        }
         mediaSession=TvMediaSession(this,{ if(foreground && screen=="player") requestPlayback(true) },{ if(foreground && screen=="player") requestPlayback(false) },{ position -> if(foreground && screen=="player") seekTo(position) },{ direction -> skipEpisode(direction) },{ if(foreground && screen=="player") returnToDetail() })
         message(base(),"正在读取本机记录…")
         loadLibrary()
@@ -1997,10 +2003,11 @@ class MainActivity: Activity() {
                 library.searchToken=""; applySessionToken(); session.text=sessionLabel()
             })
         }
-        // 本版不含应用内更新：这一行只读出版本号，没有网络请求、没有下载，也不申请安装权限。
+        // 「版本与更新」：打开更新弹窗，可以手动检查、下载并交给系统安装；
+        // 自动检查只在应用前台浏览时进行，播放中不打扰（见 AppUpdater）。
         lateinit var versionRow: TvButton
-        versionRow=setting(device,"版本信息  ·  ${BuildConfig.VERSION_NAME}") {
-            tvTools.info("版本信息","当前版本 ${BuildConfig.VERSION_NAME}（versionCode ${BuildConfig.VERSION_CODE}）\n本版不含应用内更新：新版 APK 请自行下载后用系统安装器覆盖安装，本机记录保留。",versionRow)
+        versionRow=setting(device,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") {
+            appUpdater.show(versionRow)
         }
         lateinit var license: TvButton
         license=setting(device,"开源许可") {
@@ -3129,6 +3136,7 @@ class MainActivity: Activity() {
     }
     override fun onResume() {
         super.onResume(); foreground=true; main.removeCallbacks(tick); main.post(tick)
+        appUpdater.resume()
         if(library.isLoaded) {
             if(initialCatalogPending) showCatalog(load=true)
             else if(restoreStoppedPage) {
@@ -3155,7 +3163,7 @@ class MainActivity: Activity() {
         } else libraryLoadError?.let(::showLibraryError)
     }
     override fun onPause() {
-        foreground=false; main.removeCallbacks(tick); cancelRecovery(); cancelPrefetch(); mediaSession.deactivate()
+        foreground=false; main.removeCallbacks(tick); cancelRecovery(); cancelPrefetch(); mediaSession.deactivate(); appUpdater.pause()
         sleepTimer.cancel(); sleepChoice=0; favoriteMonitor.stop(); detailAutoplay=false; requestedAutoplay=false; pausedForLifecycle=true
         player?.pause(); saveProgress(); library.flush(); super.onPause()
     }
@@ -3174,7 +3182,7 @@ class MainActivity: Activity() {
     override fun onDestroy() {
         generation++; cancelWork()
         if(networkRegistered) connectivity.unregisterNetworkCallback(networkCallback)
-        favoriteMonitor.destroy(); tvTools.destroy(); saveProgress(); releasePlayer(); library.close()
+        favoriteMonitor.destroy(); tvTools.destroy(); appUpdater.destroy(); saveProgress(); releasePlayer(); library.close()
         artwork.close(); releaseCatalogViews(); mediaSession.release(); main.removeCallbacksAndMessages(null)
         io.shutdownNow(); prefetchWorker.shutdownNow(); danmakuWorker.shutdownNow(); networkCleanup.shutdown()
         Thread({ repository.http.dispatcher.cancelAll(); repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown() },"hgtv-network-cleanup").start()

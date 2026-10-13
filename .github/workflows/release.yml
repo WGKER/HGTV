@@ -35,6 +35,8 @@ jobs:
       code: ${{ steps.current.outputs.code }}
       apk: ${{ steps.current.outputs.apk }}
       tag: ${{ steps.current.outputs.tag }}
+      min_sdk: ${{ steps.current.outputs.min_sdk }}
+      notes: ${{ steps.diff.outputs.notes }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -52,11 +54,13 @@ jobs:
           version="$(tools/version.sh version)"
           code="$(tools/version.sh code)"
           apk="$(tools/version.sh apk)"
+          min_sdk="$(tools/version.sh min-sdk)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "code=$code"       >> "$GITHUB_OUTPUT"
           echo "apk=$apk"         >> "$GITHUB_OUTPUT"
           echo "tag=v$version"    >> "$GITHUB_OUTPUT"
-          echo "本次提交：versionName=$version versionCode=$code 产物=$apk"
+          echo "min_sdk=$min_sdk" >> "$GITHUB_OUTPUT"
+          echo "本次提交：versionName=$version versionCode=$code minSdk=$min_sdk 产物=$apk"
 
       - name: 与上一个提交对比
         id: diff
@@ -107,6 +111,13 @@ jobs:
           version_changed=false; code_changed=false
           [ "$old_version" != "$new_version" ] && version_changed=true
           [ "$old_code" != "$new_code" ] && code_changed=true
+
+          # 发布说明用本次提交的信息（subject + body），客户端更新弹窗会显示它。
+          {
+            echo "notes<<HGTV_NOTES_EOF"
+            git log -1 --pretty=%B | sed '/^$/d' | head -20
+            echo "HGTV_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
           if $version_changed && $code_changed; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -168,6 +179,51 @@ jobs:
           sha256sum "$apk" | tee SHA256SUMS
           echo "name=$apk" >> "$GITHUB_OUTPUT"
 
+      - name: 生成应用内更新的元数据
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          CODE: ${{ needs.version.outputs.code }}
+          MIN_SDK: ${{ needs.version.outputs.min_sdk }}
+          TAG: ${{ needs.version.outputs.tag }}
+          APK: ${{ needs.version.outputs.apk }}
+          NOTES: ${{ needs.version.outputs.notes }}
+        run: |
+          set -euo pipefail
+          size="$(wc -c < "$APK" | tr -d ' ')"
+          sha="$(sha256sum "$APK" | cut -d' ' -f1)"
+          # update.json 是客户端「检查更新」读的唯一文件，字段与 AppUpdate.parse 一一对应。
+          python3 - "$VERSION" "$CODE" "$MIN_SDK" "$TAG" "$APK" "$size" "$sha" "$NOTES" > update.json <<'PY'
+          import json, sys
+          version, code, min_sdk, tag, apk, size, sha, notes = sys.argv[1:9]
+          print(json.dumps({
+              "schema": 1,
+              "packageName": "com.hgtv.star",
+              "versionName": version,
+              "versionCode": int(code),
+              "minSdk": int(min_sdk),
+              "tag": tag,
+              "notes": notes.strip(),
+              "apk": {"name": apk, "size": int(size), "sha256": sha},
+          }, ensure_ascii=False, indent=2))
+          PY
+          cat update.json
+
+      - name: 校验元数据能被客户端解析
+        run: |
+          set -euo pipefail
+          ./android/gradlew -p android :core:test --tests 'com.hgtv.star.core.AppUpdatesTest' --console=plain
+          python3 - <<'PY'
+          import json, re
+          meta = json.load(open("update.json", encoding="utf-8"))
+          assert meta["schema"] == 1, "schema 必须是 1"
+          assert meta["packageName"] == "com.hgtv.star", "包名不对"
+          assert re.fullmatch(r"[0-9][0-9A-Za-z.+-]{0,63}", meta["versionName"]), "版本名不符合客户端规则"
+          assert re.fullmatch(r"v[0-9][0-9A-Za-z.+-]{0,80}", meta["tag"]), "tag 不符合客户端规则"
+          assert re.fullmatch(r"HGTV_[0-9][0-9A-Za-z.+-]{0,80}\.apk", meta["apk"]["name"]), "安装包名不符合客户端规则"
+          assert re.fullmatch(r"[0-9a-f]{64}", meta["apk"]["sha256"]), "校验值不符合客户端规则"
+          print("update.json 校验通过：", meta["versionName"], meta["versionCode"], meta["apk"]["name"])
+          PY
+
       - name: 上传构建产物
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -175,6 +231,7 @@ jobs:
           path: |
             ${{ needs.version.outputs.apk }}
             SHA256SUMS
+            update.json
 
       - name: 写发布说明
         env:
@@ -203,6 +260,6 @@ jobs:
             echo "::error::Release $TAG 已存在，请再升一次版本号"
             exit 1
           fi
-          gh release create "$TAG" "$APK" SHA256SUMS \
+          gh release create "$TAG" "$APK" SHA256SUMS update.json \
             --title "$TAG" \
             --notes-file RELEASE_NOTES.md
