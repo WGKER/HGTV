@@ -8,7 +8,7 @@
 #   tools/version.sh name     # 红果TV
 #   tools/version.sh version  # 0.15.2
 #   tools/version.sh code     # 23
-#   tools/version.sh apk      # 红果TV_0.15.2_23.apk
+#   tools/version.sh apk      # 红果TV_0.15.2.apk
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # HGTV_GRADLE_FILE 可指向别处的同名文件（CI 里用它读上一个提交的版本做对比）
@@ -25,6 +25,6 @@ case "${1:-apk}" in
   name)    printf '%s\n' "$name" ;;
   version) printf '%s\n' "$version" ;;
   code)    printf '%s\n' "$code" ;;
-  apk)     printf '%s_%s_%s.apk\n' "$name" "$version" "$code" ;;
+  apk)     printf '%s_%s.apk\n' "$name" "$version" ;;
   *) echo "用法：tools/version.sh [name|version|code|apk]" >&2; exit 2 ;;
 esac

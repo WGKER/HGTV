@@ -61,7 +61,7 @@
 从 [Releases](https://github.com/pan8664716/HGTV/releases/latest) 下载最新正式 APK，拷到电视安装，或用 ADB 覆盖安装：
 
 ```sh
-adb install -r 红果TV_0.15.2_23.apk    # 文件名：<应用名>_<版本号>_<版本code>.apk
+adb install -r 红果TV_0.15.2.apk    # 文件名：<应用名>_<版本号>.apk
 ```
 
 应用内没有检查或下载更新的入口，设置 → 版本信息只读当前版本号；新版 APK 手动覆盖安装，本机收藏、进度与设置保留。
@@ -140,7 +140,7 @@ keyPassword=your-password
 
 ```sh
 ./tools/version.sh          # 查看应用名 / 版本号 / 版本 code / 产物名
-./tools/build-kotlin.sh     # 输出 outputs/红果TV_<版本号>_<版本code>.apk
+./tools/build-kotlin.sh     # 输出 outputs/红果TV_<版本号>.apk
 ```
 
 发布新版本时同步改 `android/app/build.gradle.kts` 里的 `versionName` 与 `versionCode`，或直接用脚本：
