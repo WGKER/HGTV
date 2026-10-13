@@ -13,7 +13,6 @@
 | 来源 | 用途 |
 | --- | --- |
 | `core`（本工程 Kotlin 实现，逐行核对） | 字段名、参数、签名与响应结构的主依据 |
-| `third_party/drpys/hongguo.cjs`（本工程 Node 实现，同一套接口的另一份实现） | 交叉验证官网路由名与榜单路线 |
 | Android 12 模拟器 + 系统 CA + Frida 挂钩 `SSL_write`/`SSL_read` 实测 | 验证请求头、响应压缩（brotli）与匿名采样结论 |
 | `woshishiq1/drpys`（22261ad）、`zhenyong97/hongguo-downloader` | 签名算法与协议变换的移植来源（GPL-3.0） |
 

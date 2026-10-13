@@ -7,12 +7,11 @@
 
 | 位置 | 说明 |
 | --- | --- |
-| `third_party/drpys/hongguo.cjs` | 参考实现（JS），逐行核对的原型 |
 | `core/src/main/kotlin/com/hongguotv/core/Signer.kt` | Android/TV 端 Kotlin 移植，**只发 branch 0** |
 | `core/src/main/kotlin/com/hongguotv/core/AesV3.kt` | medusa 用的分组变换 |
 | `core/src/main/kotlin/com/hongguotv/core/Bytes.kt` | SM3 / MD5 / 端序 / 位运算原语 |
 | `core/src/main/kotlin/com/hongguotv/core/VendorConstants.kt` | 设备参数、UA、sbox、hashTable |
-| `core/src/test/resources/signing.json` | 固定向量（由 `tools/signing-oracle.cjs` 生成） |
+| `core/src/test/resources/signing.json` | 固定向量（开发期从上游 JS 参考实现逐组核对后固化） |
 
 移植上游：`woshishiq1/drpys` commit `22261adfa31435e3b3ef5a730b8a2a75bcaf1715`（GPL-3.0）。
 
@@ -337,12 +336,11 @@ query 编码：`encodeURIComponent` 风格，空格用 `%20`，`~` 不转义（K
 ## 10. 验证
 
 ```bash
-# 1) 用固定 seed 从上游 JS 重新生成向量（ts 1800500000..1800500011，12 组）
-node tools/signing-oracle.cjs
-
-# 2) Kotlin 侧逐组比对 branch / hashF13 / gorgon / helios / medusa
+# Kotlin 侧逐组比对 branch / hashF13 / gorgon / helios / medusa（12 组固定向量）
 ./android/gradlew -p android :core:test --tests 'com.hongguotv.core.SignerTest'
 ```
+
+固定向量 `core/src/test/resources/signing.json` 已随源码入库，构建与测试不需要任何外部参考实现。
 
 向量覆盖：有 body / 无 body、12 个连续时间戳，`hashF13` 输出 hex、`gorgon` 40 位 hex、
 `helios` 与 `medusa` 为 base64。任何一位常量改动都会让 12 组全部失败。
@@ -354,7 +352,7 @@ node tools/signing-oracle.cjs
 ## 11. 联网实测结论（2026-10-09）
 
 实测方式：`core/src/test/kotlin/com/hongguotv/core/LiveSigningProbeTest.kt`（Kotlin 签名器直接发真请求）
-＋ 同一批对照实验用 `third_party/drpys/hongguo.cjs` 逐头篡改后重发，观察平台判定。
+＋ 同一批对照实验逐头篡改后重发，观察平台判定。
 
 ```bash
 JAVA_HOME=$(/usr/libexec/java_home -v 17) HONGGUO_LIVE=1 \

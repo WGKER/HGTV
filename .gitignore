@@ -13,20 +13,31 @@ __pycache__/
 *.py[cod]
 *.apk
 *.aab
+*.ap_
+*.dex
+*.class
+*.jar
+*.aar
+*.so
 
-# Local credentials and signing material
-.env
-.env.*
+# Signing material and secrets — never commit these
 *.jks
 *.keystore
+*.p12
+*.pfx
+*.pem
+*.key
 keystore.properties
+signing.properties
+.env
+.env.*
+!.env.example
+secrets.properties
 
-# Local captures and downloaded media
+# Local captures, downloaded media and delivery artifacts
 /captures/
 /downloads/
 /tmp/
-
-# Delivery artifacts and native intermediates
 /outputs/
 .cxx/
 .externalNativeBuild/
