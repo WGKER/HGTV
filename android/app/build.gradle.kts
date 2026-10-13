@@ -5,22 +5,22 @@ val signingProperties = Properties().apply { val config = rootProject.file("keys
 fun signingValue(env: String, key: String): String? = System.getenv(env) ?: signingProperties.getProperty(key)
 
 android {
-    namespace = "com.hongguotv.nativeapp"
+    namespace = "com.hgtv.star"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.hongguotv.nativeapp"
+        applicationId = "com.hgtv.star"
         minSdk = 26
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 23
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.15.2"
+        versionCode = System.getenv("HGTV_VERSION_CODE")?.toInt() ?: 23
+        versionName = System.getenv("HGTV_VERSION_NAME") ?: "0.15.2"
     }
     buildFeatures { buildConfig = true }
     signingConfigs {
         create("delivery") {
-            storeFile = signingValue("HONGGUOTV_KEYSTORE", "storeFile")?.let { file(it) }
-            storePassword = signingValue("HONGGUOTV_STORE_PASSWORD", "storePassword")
-            keyAlias = signingValue("HONGGUOTV_KEY_ALIAS", "keyAlias")
-            keyPassword = signingValue("HONGGUOTV_KEY_PASSWORD", "keyPassword")
+            storeFile = signingValue("HGTV_KEYSTORE", "storeFile")?.let { file(it) }
+            storePassword = signingValue("HGTV_STORE_PASSWORD", "storePassword")
+            keyAlias = signingValue("HGTV_KEY_ALIAS", "keyAlias")
+            keyPassword = signingValue("HGTV_KEY_PASSWORD", "keyPassword")
         }
     }
     buildTypes { getByName("release") { signingConfig = signingConfigs.getByName("delivery"); isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }

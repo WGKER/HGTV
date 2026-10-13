@@ -1,11 +1,11 @@
 <p align="center"><img src="docs/preview/app-logo.png" width="512" alt="红果 TV 应用图标"></p>
 
-# 红果 TV（Android TV 原生版）_(hongguoTV)_
+# 红果 TV（Android TV 原生版）_(HGTV)_
 
 面向 Android TV 的短剧客户端：单 APK、Kotlin + Media3，装到电视上联网即用。
 
 安装一个 APK 就能在电视上浏览、搜索和播放，不需要在电脑或 NAS 上常驻服务，也不需要填写服务器地址。
-应用名「红果 TV 原生版」，包名 `com.hongguotv.nativeapp`，最低 Android 8.0（API 26），目标 API 36。
+应用名「红果 TV 原生版」，包名 `com.hgtv.star`，最低 Android 8.0（API 26），目标 API 36。
 收藏、观看进度与设置只保存在本机，不上传。
 
 ## 目录
@@ -60,10 +60,10 @@
 
 ## 下载
 
-从 [Releases](https://github.com/pan8664716/hongguoTV/releases/latest) 下载最新正式 APK，拷到电视安装，或用 ADB 覆盖安装：
+从 [Releases](https://github.com/pan8664716/HGTV/releases/latest) 下载最新正式 APK，拷到电视安装，或用 ADB 覆盖安装：
 
 ```sh
-adb install -r hongguotv-kotlin-0.15.2-android8.apk
+adb install -r hgtv-0.15.2-android8.apk
 ```
 
 应用内没有检查或下载更新的入口，设置 → 版本信息只读当前版本号；新版 APK 手动覆盖安装，本机收藏、进度与设置保留。
@@ -137,11 +137,11 @@ keyAlias=your-alias
 keyPassword=your-password
 ```
 
-对应环境变量：`HONGGUOTV_KEYSTORE`、`HONGGUOTV_STORE_PASSWORD`、`HONGGUOTV_KEY_ALIAS`、`HONGGUOTV_KEY_PASSWORD`。
+对应环境变量：`HGTV_KEYSTORE`、`HGTV_STORE_PASSWORD`、`HGTV_KEY_ALIAS`、`HGTV_KEY_PASSWORD`。
 
 ```sh
 ./tools/build-kotlin.sh
-# 输出：outputs/hongguotv-kotlin-<版本>-android8.apk
+# 输出：outputs/hgtv-<版本>-android8.apk
 ```
 
 ## 维护者
@@ -158,7 +158,7 @@ keyPassword=your-password
 
 本项目为自用工具，不承诺接受外部 PR。
 
-- 提问或报 bug 请开 [Issue](https://github.com/pan8664716/hongguoTV/issues)；提交代码前请先开 Issue 说明意图。
+- 提问或报 bug 请开 [Issue](https://github.com/pan8664716/HGTV/issues)；提交代码前请先开 Issue 说明意图。
 - 补丁需保持现有约定：不引入新的第三方运行时依赖，不在源码或提交里放入私钥、口令与构建产物。
 - 请在提交信息里说明改动的动机与验证方式；涉及界面的改动请附上 `tools/` 下对应校验脚本的输出。
 

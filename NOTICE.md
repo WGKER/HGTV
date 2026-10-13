@@ -7,7 +7,7 @@
 - 本版改动：完整 Kotlin 实现；签名只选择已验证的 hash branch 0；加密媒体通过 Media3 DataSource 直接读取；增加样本边界检查、子样本处理和 AVC 原始编码恢复。
 
 本仓库的 Android TV 原生应用源码和派生实现以 GPL-3.0-only 发布，许可证全文见 `LICENSE`
-（与仓库根目录 `LICENSE` 同一份文本）。源码仓库：https://github.com/pan8664716/hongguoTV ，
+（与仓库根目录 `LICENSE` 同一份文本）。源码仓库：https://github.com/pan8664716/HGTV ，
 发布 APK 时同时提供对应源码、Gradle 包装器和构建说明。APK 不包含 Node、React Native、JavaScript 引擎或该 JavaScript 源文件。开发期用于逐行核对的上游 JS 参考实现只在本机使用，不随本仓库分发，也不参与应用构建或运行。
 
 其他依赖：
@@ -28,5 +28,5 @@
 应用图标和 TV banner 沿用本仓库素材。这里的应用不是内容平台官方客户端。
 
 应用内「设置 → 开源许可」弹窗展示的就是本文件的信息摘要：GPL-3.0-only 的许可范围、
-源码仓库 `pan8664716/hongguoTV`、上面的第三方组件清单，
+源码仓库 `pan8664716/HGTV`、上面的第三方组件清单，
 以及「本机记录只保存在这台设备上」这一条边界。改这里时同步改 `MainActivity.licenseText()`。

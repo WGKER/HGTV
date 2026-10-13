@@ -230,7 +230,7 @@
   按 `storedValue`（`soft-gray` / `creamy-milk` / `deep-dark` / `cool-mint` /
   `porcelain` / `moonstone` / `ivory-sand` / `silver-sage` / `blue-haze` / `champagne-silk` /
   `dusty-mauve` / `pale-olive` / `graphite` / `midnight-blue`）落盘。
-  它**不进** `com.hongguotv.core` 的 `Library`：那里装的是内容与观看记录，
+  它**不进** `com.hgtv.star.core` 的 `Library`：那里装的是内容与观看记录，
   还要参与手机备份的合并与冲突处理，让一套配色跟着备份在设备之间搬家没有意义。
 - **读**：`MainActivity.onCreate` 里在建任何视图之前同步读一次（一个很小的文件），
   顺手把窗口底色也换成该主题的底色，启动那一帧不会闪出另一套材质。

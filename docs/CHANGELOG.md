@@ -645,7 +645,7 @@ Toast 是独立于界面的一层浮窗：样式、字号、焦点行为都不�
 
 ### 5. 开源许可按当前仓库更新
 
-「设置 → 开源许可」弹窗正文改为按当前仓库写：源码仓库 `github.com/pan8664716/hongguoTV`、
+「设置 → 开源许可」弹窗正文改为按当前仓库写：源码仓库 `github.com/pan8664716/HGTV`、
 源码目录 ``、根目录 `LICENSE`（GPL-3.0）与 `NOTICE.md`、Releases 下载入口，
 以及第三方组件（Media3 / OkHttp / Kotlin / ZXing / Bouncy Castle / jsoup）与
 「本机记录只保存在这台设备上」的边界。文案收敛成 `MainActivity.licenseText()`，

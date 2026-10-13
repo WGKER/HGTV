@@ -7,4 +7,4 @@ dependencies {
     implementation("org.jsoup:jsoup:1.23.2")
     testImplementation("junit:junit:4.13.2")
 }
-application { mainClass.set("com.hongguotv.core.ProbeKt") }
+application { mainClass.set("com.hgtv.star.core.ProbeKt") }

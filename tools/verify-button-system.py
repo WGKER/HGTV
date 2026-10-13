@@ -7,12 +7,12 @@
 
 用法：
     python3 tools/verify-button-system.py [源码目录]
-默认源码目录为 app/src/main/kotlin/com/hongguotv/nativeapp
+默认源码目录为 android/app/src/main/kotlin/com/hgtv/star
 """
 import re, sys
 from pathlib import Path
 
-root = Path(sys.argv[1] if len(sys.argv) > 1 else "android/app/src/main/kotlin/com/hongguotv/nativeapp")
+root = Path(sys.argv[1] if len(sys.argv) > 1 else "android/app/src/main/kotlin/com/hgtv/star")
 checks = []
 def check(label, condition):
     if not condition: raise AssertionError(label)
