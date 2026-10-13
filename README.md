@@ -1,12 +1,10 @@
-<p align="center"><img src="docs/preview/app-logo.png" width="512" alt="红果 TV 应用图标"></p>
+<p align="center"><img src="docs/preview/app-logo.png" width="192" alt="红果TV 应用图标"></p>
 
-# 红果 TV（Android TV 原生版）_(HGTV)_
+# 红果TV（Android TV 8+）
 
-面向 Android TV 的短剧客户端：单 APK、Kotlin + Media3，装到电视上联网即用。
+面向 Android TV 的短剧客户端：单 APK、Kotlin + Media3，装到电视上无需登录联网即用。
 
-安装一个 APK 就能在电视上浏览、搜索和播放，不需要在电脑或 NAS 上常驻服务，也不需要填写服务器地址。
-应用名「红果 TV 原生版」，包名 `com.hgtv.star`，最低 Android 8.0（API 26），目标 API 36。
-收藏、观看进度与设置只保存在本机，不上传。
+本项目 fork 自 [N3urda/hongguoTV](https://github.com/N3urda/hongguoTV)。
 
 ## 目录
 
@@ -63,7 +61,7 @@
 从 [Releases](https://github.com/pan8664716/HGTV/releases/latest) 下载最新正式 APK，拷到电视安装，或用 ADB 覆盖安装：
 
 ```sh
-adb install -r hgtv-0.15.2-android8.apk
+adb install -r 红果TV_0.15.2_23.apk    # 文件名：<应用名>_<版本号>_<版本code>.apk
 ```
 
 应用内没有检查或下载更新的入口，设置 → 版本信息只读当前版本号；新版 APK 手动覆盖安装，本机收藏、进度与设置保留。
@@ -76,7 +74,7 @@ adb install -r hgtv-0.15.2-android8.apk
 
 ## 使用
 
-在电视应用列表打开「红果 TV 原生版」，进入首页或搜索。
+在电视应用列表打开「红果TV」，进入首页或搜索。
 
 | 位置 | 按键 | 行为 |
 | --- | --- | --- |
@@ -102,7 +100,7 @@ android/                Gradle 工程根（Android Studio 直接打开这一层�
 ├─ gradle/ gradlew       Gradle 8.14.3 包装器
 └─ build.gradle.kts     构建脚本与发布签名配置
 docs/                   项目文档；preview/ 放应用图标、主题图与界面截图
-tools/                  图标 / 主题 / 界面校对脚本、静态校验脚本、构建脚本
+tools/                  图标 / 主题 / 界面校对脚本、静态校验脚本、构建与版本脚本
 README.md NOTICE.md LICENSE
 ```
 
@@ -126,6 +124,7 @@ python3 tools/app-icon.py                # 重出应用图标、电视横幅与 
 python3 tools/theme-preview.py           # 十四套主题对比度自检 → docs/preview/theme.png
 python3 tools/neumorphism-preview.py     # 首页 / 按钮六态 / 强调色校对（仅本机查看）
 python3 tools/maintainer-avatars.py --check  # 维护者头像是否为 256px 圆形透明底
+tools/version.sh                            # 应用名 / 版本号 / 版本 code / 产物名
 ```
 
 正式包使用独立发布密钥，**私钥与口令不入库**。重建发布包时用环境变量，或在 `android/keystore.properties` 配置：
@@ -140,12 +139,40 @@ keyPassword=your-password
 对应环境变量：`HGTV_KEYSTORE`、`HGTV_STORE_PASSWORD`、`HGTV_KEY_ALIAS`、`HGTV_KEY_PASSWORD`。
 
 ```sh
-./tools/build-kotlin.sh
-# 输出：outputs/hgtv-<版本>-android8.apk
+./tools/version.sh          # 查看应用名 / 版本号 / 版本 code / 产物名
+./tools/build-kotlin.sh     # 输出 outputs/红果TV_<版本号>_<版本code>.apk
 ```
 
-## 维护者
+发布新版本时同步改 `android/app/build.gradle.kts` 里的 `versionName` 与 `versionCode`，或直接用脚本：
 
+```sh
+./tools/bump-version.sh 0.16.0     # 版本号自增，versionCode 自动 +1
+```
+
+推送 `main` 时，[Release 工作流](.github/workflows/release.yml) 会比较这次与上一次提交的版本号与版本 code：
+两个都变了就打正式包并发 Release（tag `v<版本号>`），只变一个会失败，都没变则跳过。
+
+工作流需要以下仓库 Secrets（Settings → Secrets and variables → Actions）：
+
+| Secret | 内容 |
+| --- | --- |
+| `HGTV_KEYSTORE_BASE64` | 发布密钥库的 base64：`base64 -i release.jks \| pbcopy` |
+| `HGTV_STORE_PASSWORD` | 密钥库口令 |
+| `HGTV_KEY_ALIAS` | 密钥别名 |
+| `HGTV_KEY_PASSWORD` | 密钥口令 |
+
+## 维护者
+<table>
+<tr>
+<td align="center"><a href="https://github.com/pan8664716"><img src="docs/maintainers/pan8664716.png" width="88" alt="pan8664716"><br><sub><b>pan8664716</b></sub></a></td>
+</tr>
+</table>
+
+
+## 参与贡献
+提问或报 bug 请开 [Issue](https://github.com/pan8664716/HGTV/issues)；提交代码前请先开 Issue 说明意图。
+
+### 贡献者
 <table>
 <tr>
 <td align="center"><a href="https://github.com/pan8664716"><img src="docs/maintainers/pan8664716.png" width="88" alt="pan8664716"><br><sub><b>pan8664716</b></sub></a></td>
@@ -154,16 +181,6 @@ keyPassword=your-password
 </tr>
 </table>
 
-## 参与贡献
-
-本项目为自用工具，不承诺接受外部 PR。
-
-- 提问或报 bug 请开 [Issue](https://github.com/pan8664716/HGTV/issues)；提交代码前请先开 Issue 说明意图。
-- 补丁需保持现有约定：不引入新的第三方运行时依赖，不在源码或提交里放入私钥、口令与构建产物。
-- 请在提交信息里说明改动的动机与验证方式；涉及界面的改动请附上 `tools/` 下对应校验脚本的输出。
-
 ## 许可证
 
 [GPL-3.0-only](LICENSE) © 2026 pan8664716；第三方依赖声明见 [NOTICE.md](NOTICE.md)。
-
-本项目 fork 自 [N3urda/hongguoTV](https://github.com/N3urda/hongguoTV)。

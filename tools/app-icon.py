@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""红果 TV 的应用图标与电视横幅：一份几何、一套配色，出四份产物。
+"""红果TV 的应用图标与电视横幅：一份几何、一套配色，出四份产物。
 
 图标是**扁平风格**的：苹果公司的 Apple 标志（果身 + 果叶）两块纯色——
 果身 `#EE4C33`、果叶 `#6E9F3E`，果叶上一条 `#3E6522` 的中脉，就这些；
@@ -426,7 +426,7 @@ def banner_image():
     img.alpha_composite(mark, (int(w * 0.10), (h - mark.height) // 2))
     d = ImageDraw.Draw(img)
     f = font(62, bold=True)
-    text = "红果 TV"
+    text = "红果TV"
     box = d.textbbox((0, 0), text, font=f)
     tx = int(w * 0.47)
     ty = int(h * 0.5 - (box[1] + box[3]) / 2.0) - 8
@@ -554,7 +554,7 @@ def preview_sheet():
     H = head + big + 52 + 34 + len(strips) * (strip_h + 16) + 34 + side + 20 + 46 + 30 + banner.height + 26
     img = Image.new("RGB", (W, H), (0xFA, 0xFA, 0xFB))
     d = ImageDraw.Draw(img)
-    d.text((pad, 26), "红果 TV 应用图标 · Apple 标志（扁平 · 纯白背景）",
+    d.text((pad, 26), "红果TV 应用图标 · Apple 标志（扁平 · 纯白背景）",
            font=font(30, bold=True), fill=(0x1A, 0x1D, 0x22))
     d.text((pad, 62), "tools/app-icon.py 生成：两块纯色 + 一块纯白不透明底板，下面是同一张图贴在三种壁纸上。",
            font=font(19), fill=(0x5A, 0x62, 0x6C))

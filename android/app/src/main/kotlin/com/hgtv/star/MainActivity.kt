@@ -31,7 +31,7 @@ private const val LOAD_MORE="load:more"
  *
  * 圆形入口的顺序是 **搜索 → 分类 → 榜单 → 设置**（`nav` 的下标 0..3，
  * 而 [MainActivity.navEntry] 用 `nav[tab-1]` 取，所以这四个标签从 1 开始编号）。
- * 首页是 0：品牌「红果 TV」是标识不是按钮，不占入口位。
+ * 首页是 0：品牌「红果TV」是标识不是按钮，不占入口位。
  */
 private const val TAB_HOME=0
 private const val TAB_SEARCH=1
@@ -802,7 +802,7 @@ class MainActivity: Activity() {
     /**
      * 顶部导航栏左侧显示的页面名。
      *
-     * 首页与搜索 / 设置页显示品牌「红果 TV」；二级界面（收藏 / 历史 / 稍后观看）显示自己的名字，
+     * 首页与搜索 / 设置页显示品牌「红果TV」；二级界面（收藏 / 历史 / 稍后观看）显示自己的名字，
      * 排行榜页显示**当前榜单的名字**——这些页面原来的标题行因此可以整行去掉。
      */
     private fun pageTitle(): String = when {
@@ -810,13 +810,13 @@ class MainActivity: Activity() {
         tab==TAB_RANK -> "热播榜"
         tab==TAB_CATEGORY -> "分类"
         tab==TAB_SETTINGS -> "设置"
-        else -> "红果 TV"
+        else -> "红果TV"
     }
     /**
      * 当前标签对应的顶部图标入口。`nav` 是四个页面入口（搜索 / 分类 / 榜单 / 设置），
      * 顺序与 [TAB_SEARCH]…[TAB_SETTINGS] 一一对应。
      *
-     * 首页（[TAB_HOME]）没有自己的入口：品牌「红果 TV」是标识而不是按钮，不参与焦点链，
+     * 首页（[TAB_HOME]）没有自己的入口：品牌「红果TV」是标识而不是按钮，不参与焦点链，
      * 这里返回 null——调用方跳过聚焦即可（回主界面走返回键）。
      */
     private fun navEntry(index: Int = tab): View? = nav.getOrNull(index-1)
@@ -884,7 +884,7 @@ class MainActivity: Activity() {
         }
         invalidatePage(); screen="catalog"; releaseCatalogViews(); val container=base()
         if(foreground && library.isLoaded && !favoriteMonitor.running) main.post { if(foreground && screen=="catalog") favoriteMonitor.check() }
-        // 顶部导航栏：左侧是页面名（首页是品牌「红果 TV」，二级界面与榜单页显示自己的名字），
+        // 顶部导航栏：左侧是页面名（首页是品牌「红果TV」，二级界面与榜单页显示自己的名字），
         // 右侧是这一页自己的动作与 4 个圆形图标入口（刷新 / 搜索 / 排行榜 / 设置）。
         // 整条**不画底板**：没有边框、也没有可以按进去的面板，文字直接落在内容线上；
         // 品牌是标识而不是按钮，因此不参与焦点链（不可选中、不可点击），回主界面一律走返回键。
@@ -2069,7 +2069,7 @@ class MainActivity: Activity() {
         license.nextFocusDownId=(themeRows[TvTheme.entries[THEME_GRID_COLUMNS/2]] ?: license).id
         syncDanmakuStyleRows()
         navIcons().forEach { it.nextFocusDownId=qualityButton.id }
-        parent.addView(text("红果 TV  /  ${BuildConfig.VERSION_NAME}    ·    收藏与进度保存在本机",12f,muted).apply { setPadding(dp(12),dp(20),0,dp(10)) })
+        parent.addView(text("红果TV  /  ${BuildConfig.VERSION_NAME}    ·    收藏与进度保存在本机",12f,muted).apply { setPadding(dp(12),dp(20),0,dp(10)) })
         navEntry()?.requestFocus()
     }
     /**
@@ -2091,7 +2091,7 @@ class MainActivity: Activity() {
      * 以及本机记录的边界。发布地址指向本仓库的 Releases，不再引用已经不存在的公开镜像仓库。
      */
     private fun licenseText(): String = listOf(
-        "红果 TV 原生版 ${BuildConfig.VERSION_NAME} · GPL-3.0-only",
+        "红果TV ${BuildConfig.VERSION_NAME} · GPL-3.0-only",
         "",
         "完整源码与许可证全文：github.com/pan8664716/HGTV",
         "  技术栈：Kotlin + Android 原生 View + Media3",
@@ -3076,7 +3076,7 @@ class MainActivity: Activity() {
      * 取消后焦点回到首页入口，再按返回才会重新弹出。
      */
     private fun confirmExit() {
-        tvTools.confirm("退出红果 TV","收藏与观看进度已经保存在本机，确定要退出吗？",navEntry() ?: nav.firstOrNull() ?: currentFocus) { finish() }
+        tvTools.confirm("退出红果TV","收藏与观看进度已经保存在本机，确定要退出吗？",navEntry() ?: nav.firstOrNull() ?: currentFocus) { finish() }
     }
     @Deprecated("TV remote back is handled through the activity")
     override fun onBackPressed()=goBack()
