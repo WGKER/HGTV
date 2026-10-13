@@ -11,12 +11,12 @@ gradle_file="$repo_dir/android/app/build.gradle.kts"
 new_name="${1:-}"
 [[ -n "$new_name" ]] || { echo "用法：tools/bump-version.sh <版本号> [版本code]" >&2; exit 2; }
 [[ "$new_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]] \
-  || { echo "版本号格式不对：$new_name（期望 0.16.0 这样）" >&2; exit 2; }
+  || { echo "版本号格式不对：${new_name}（期望 0.16.0 这样）" >&2; exit 2; }
 
 current_code="$(HGTV_GRADLE_FILE="$gradle_file" "$repo_dir/tools/version.sh" code)"
 if [[ -n "${2:-}" ]]; then
   new_code="$2"
-  [[ "$new_code" =~ ^[0-9]+$ ]] || { echo "版本 code 必须是整数：$new_code" >&2; exit 2; }
+  [[ "$new_code" =~ ^[0-9]+$ ]] || { echo "版本 code 必须是整数：${new_code}" >&2; exit 2; }
 else
   new_code=$((current_code + 1))
 fi

@@ -141,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "红果TV $VERSION（versionCode $CODE）"
+            echo "红果TV ${VERSION}（versionCode ${CODE}）"
             echo
             echo "安装包：\`$APK\`"
             echo "校验：\`SHA256SUMS\`（\`sha256sum -c SHA256SUMS\`）"
