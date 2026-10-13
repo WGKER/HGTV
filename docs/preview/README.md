@@ -6,6 +6,8 @@ README 里展示的资源都在这里：
 - `theme.png`：十四套材质主题排成 7 列 × 2 行的对比图（`tools/theme-preview.py`）。
 - `1.jpg` – `9.jpg`：界面截图。
 
+维护者头像在 [`docs/maintainers/`](../maintainers/)。
+
 其余校对图（首页、按钮六态、强调色候选、图标白底对照）由脚本输出到 `docs/preview/.local/`，
 只在本机查看，不入库：
 

@@ -8,33 +8,15 @@
 
 ## 目录
 
-- [安全](#安全)
-- [背景](#背景)
 - [功能](#功能)
 - [界面](#界面)
-- [安装](#安装)
+- [下载](#下载)
 - [使用](#使用)
 - [工程结构](#工程结构)
 - [开发](#开发)
 - [维护者](#维护者)
 - [参与贡献](#参与贡献)
 - [许可证](#许可证)
-
-## 安全
-
-- 仓库不含任何发布私钥、签名口令或构建产物：`release.jks`、`keystore.properties`、`local.properties` 与
-  `outputs/` 下的 APK 都由 [`.gitignore`](.gitignore) 排除，签名口令只以环境变量或本机配置传入。
-- 本机记录（收藏 / 进度 / 设置）只存在设备上，不上传。
-- 仅在打开「手机输入」或「手机备份与恢复」窗口时，应用才临时监听局域网 HTTP，最长 5 分钟，窗口关闭或退到后台即停止。
-- 遇到错误会明确显示，不会用假内容顶替。
-
-## 背景
-
-目标是「电视上装一个 APK 就能用」：不要额外部署服务，不要配置地址，遥控器就能完成浏览、搜索、收藏、续播与播放设置。
-
-因此客户端做成完全独立的原生应用：界面用 Kotlin + Android 原生 View，播放用 Media3；
-媒体数据由应用自己通过 HTTPS 分段拉取并在本机处理，没有 JS 引擎，也没有常驻内容服务。
-封面、索引与播放缓冲都有上限，媒体只在内存中处理，不把整部剧下载到存储。
 
 ## 功能
 
@@ -74,9 +56,9 @@
 </tr>
 </table>
 
-## 安装
+## 下载
 
-从 [Releases](https://github.com/pan8664716/hongguoTV/releases) 下载最新正式 APK，拷到电视安装，或用 ADB 覆盖安装：
+从 [Releases](https://github.com/pan8664716/hongguoTV/releases/latest) 下载最新正式 APK，拷到电视安装，或用 ADB 覆盖安装：
 
 ```sh
 adb install -r hongguotv-kotlin-0.15.2-android8.apk
@@ -159,16 +141,15 @@ keyPassword=your-password
 # 输出：outputs/hongguotv-kotlin-<版本>-android8.apk
 ```
 
-### 验证边界
-
-已进行 JVM 单元测试、Android lint、正式 APK 构建，并在 Android TV API 36 模拟器上做过真实播放与遥控器检查。
-最低 API 26 配置与静态检查不等同于实体电视验收：**Android 8.0 实体电视的芯片解码、音频输出与长期稳定性仍需实机验证**；
-解码失败可先试 720P，仍失败需要该电视的日志。实体电视上的弹幕观感（字号、轨道密度、3 米外可读性）、
-低端 GPU 帧率与长时间观看表现同样待实机验收。
-
 ## 维护者
 
-[@pan8664716](https://github.com/pan8664716) — 仓库所有者与唯一维护者。
+<table>
+<tr>
+<td align="center"><a href="https://github.com/pan8664716"><img src="docs/maintainers/pan8664716.png" width="80" alt="pan8664716"><br><sub><b>pan8664716</b></sub></a></td>
+<td align="center"><a href="https://github.com/N3urda"><img src="docs/maintainers/N3urda.png" width="80" alt="N3urda"><br><sub><b>N3urda</b></sub></a></td>
+<td align="center"><a href="https://github.com/ermilylu"><img src="docs/maintainers/ermilylu.png" width="80" alt="ermilylu"><br><sub><b>ermilylu</b></sub></a></td>
+</tr>
+</table>
 
 ## 参与贡献
 
