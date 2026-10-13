@@ -61,7 +61,7 @@
 从 [Releases](https://github.com/pan8664716/HGTV/releases/latest) 下载最新正式 APK，拷到电视安装，或用 ADB 覆盖安装：
 
 ```sh
-adb install -r 红果TV_1.0.0.apk    # 文件名：<应用名>_<版本号>.apk
+adb install -r HGTV_1.0.0.apk    # 文件名：<标识>_<版本号>.apk
 ```
 
 应用内没有检查或下载更新的入口，设置 → 版本信息只读当前版本号；新版 APK 手动覆盖安装，本机收藏、进度与设置保留。
@@ -124,42 +124,8 @@ python3 tools/app-icon.py                # 重出应用图标、电视横幅与 
 python3 tools/theme-preview.py           # 十四套主题对比度自检 → docs/preview/theme.png
 python3 tools/neumorphism-preview.py     # 首页 / 按钮六态 / 强调色校对（仅本机查看）
 python3 tools/maintainer-avatars.py --check  # 维护者头像是否为 256px 圆形透明底
-tools/version.sh                            # 应用名 / 版本号 / 版本 code / 产物名
+tools/version.sh                            # 应用名 / 标识 / 版本号 / 版本 code / 产物名
 ```
-
-正式包使用独立发布密钥，**私钥与口令不入库**。重建发布包时用环境变量，或在 `android/keystore.properties` 配置：
-
-```properties
-storeFile=/absolute/path/to/your-release.jks
-storePassword=your-password
-keyAlias=your-alias
-keyPassword=your-password
-```
-
-对应环境变量：`HGTV_KEYSTORE`、`HGTV_STORE_PASSWORD`、`HGTV_KEY_ALIAS`、`HGTV_KEY_PASSWORD`。
-
-```sh
-./tools/version.sh          # 查看应用名 / 版本号 / 版本 code / 产物名
-./tools/build-kotlin.sh     # 输出 outputs/红果TV_<版本号>.apk
-```
-
-发布新版本时同步改 `android/app/build.gradle.kts` 里的 `versionName` 与 `versionCode`，或直接用脚本：
-
-```sh
-./tools/bump-version.sh 0.16.0     # 版本号自增，versionCode 自动 +1
-```
-
-推送 `main` 时，[Release 工作流](.github/workflows/release.yml) 会比较这次与上一次提交的版本号与版本 code：
-两个都变了就打正式包并发 Release（tag `v<版本号>`），只变一个会失败，都没变则跳过。
-
-工作流需要以下仓库 Secrets（Settings → Secrets and variables → Actions）：
-
-| Secret | 内容 |
-| --- | --- |
-| `HGTV_KEYSTORE_BASE64` | 发布密钥库的 base64：`base64 -i release.jks \| pbcopy` |
-| `HGTV_STORE_PASSWORD` | 密钥库口令 |
-| `HGTV_KEY_ALIAS` | 密钥别名 |
-| `HGTV_KEY_PASSWORD` | 密钥口令 |
 
 ## 维护者
 <table>

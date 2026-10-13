@@ -6,7 +6,7 @@
 
 第一个正式发布版本。应用名统一为「红果TV」，包名 `com.hgtv.star`，versionCode 24，最低 API 26 / 目标 API 36。
 
-- 产物：`红果TV_1.0.0.apk`（命名规则 `<应用名>_<版本号>.apk`）。
+- 产物：`HGTV_1.0.0.apk`（命名规则 `<标识>_<版本号>.apk`；附件名用 ASCII，GitHub 会剥掉中文）。
 - 仓库只维护 Android TV 原生客户端；可构建的 Gradle 工程收在 `android/`，仓库根只放文档与工具。
 - 新增发布流水线：推送 `main` 时比对版本号与版本 code，两者同时变动才打包并创建 Release。
 
