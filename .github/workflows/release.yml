@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write          # 创建 Release 需要
+  contents: read
 
 concurrency:
   group: release-main
@@ -21,6 +21,8 @@ jobs:
     name: 检查版本号
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       changed: ${{ steps.diff.outputs.changed }}
       version: ${{ steps.current.outputs.version }}
@@ -47,21 +49,31 @@ jobs:
 
       - name: 与上一个提交对比
         id: diff
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          previous="$(git rev-parse --verify -q HEAD~1 || true)"
+          # 上一次推送前的提交；新分支或手动触发时回落到 HEAD~1
+          previous=""
+          if [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            previous="$BEFORE_SHA"
+          elif git rev-parse --verify -q HEAD~1 >/dev/null; then
+            previous="$(git rev-parse HEAD~1)"
+          fi
           if [ -z "$previous" ]; then
-            echo "没有上一个提交（首次推送），视为版本已变动。"
+            echo "没有可比对的历史（首次推送），视为版本已变动。"
             echo "changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "比对基准：$previous"
           git show "$previous:android/app/build.gradle.kts" > /tmp/previous-build.gradle.kts
           export HGTV_GRADLE_FILE=/tmp/previous-build.gradle.kts
           old_version="$(tools/version.sh version)"
           old_code="$(tools/version.sh code)"
           new_version="${{ steps.current.outputs.version }}"
           new_code="${{ steps.current.outputs.code }}"
-          echo "上一个提交：versionName=$old_version versionCode=$old_code"
+          echo "基准版本：versionName=${old_version} versionCode=${old_code}"
 
           version_changed=false; code_changed=false
           [ "$old_version" != "$new_version" ] && version_changed=true
@@ -83,6 +95,8 @@ jobs:
     if: needs.version.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write        # 创建 Release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
