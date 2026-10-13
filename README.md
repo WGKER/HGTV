@@ -4,7 +4,8 @@
 
 面向 Android TV 的短剧客户端：单 APK、Kotlin + Media3，装到电视上无需登录联网即用。
 
-本项目 fork 自 [N3urda/hongguoTV](https://github.com/N3urda/hongguoTV)。
+本项目是 [N3urda/hongguoTV](https://github.com/N3urda/hongguoTV) 的 fork，按 GPL-3.0-only 派生，上游代码著作权归其作者。**自 2026-10-06 起在上游基础上修改**：移除 React Native 电视版、iOS 工程与
+Node / Docker 内容服务，只保留 Android TV 原生客户端并把 Gradle 工程收进 `android/`；包名由 `com.hongguotv.nativeapp` 改为 `com.hgtv.star`，应用名改为「红果TV」；重做界面与发布流程。逐项差异见 [变更记录](docs/CHANGELOG.md)，派生与第三方声明见 [NOTICE.md](NOTICE.md)。
 
 ## 目录
 
@@ -66,6 +67,8 @@ adb install -r HGTV_1.0.1.apk    # 文件名：<标识>_<版本号>.apk
 ```
 
 进入应用时若发现新版本会弹窗询问，设置 → 版本与更新里也可手动检查并覆盖安装；本机收藏、进度与设置保留。
+
+应用与红果官方无关联，内容接口为非官方实现，平台变化可能导致失效。
 
 ### 依赖
 
@@ -137,7 +140,7 @@ tools/version.sh                            # 应用名 / 标识 / 版本号 / �
 
 
 ## 参与贡献
-提问或报 bug 请开 [Issue](https://github.com/pan8664716/HGTV/issues)；提交代码前请先开 Issue 说明意图。
+本仓库不接受外部 PR，也不承诺响应功能请求或平台接口变更工单；issue 入口已关闭，有问题请到上游 [N3urda/hongguoTV](https://github.com/N3urda/hongguoTV) 讨论，或对照 [变更记录](docs/CHANGELOG.md) 自行核对。
 
 ### 贡献者
 <table>
@@ -150,4 +153,4 @@ tools/version.sh                            # 应用名 / 标识 / 版本号 / �
 
 ## 许可证
 
-[GPL-3.0-only](LICENSE) © 2026 pan8664716；第三方依赖声明见 [NOTICE.md](NOTICE.md)。
+[GPL-3.0-only](LICENSE) © 2026 pan8664716；派生自 [N3urda/hongguoTV](https://github.com/N3urda/hongguoTV)（GPL-3.0，上游著作权归其作者）。派生说明与第三方依赖清单见 [NOTICE.md](NOTICE.md)。
