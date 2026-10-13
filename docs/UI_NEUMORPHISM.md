@@ -82,7 +82,7 @@
 
 #### 怎么选的：六支候选并排比
 
-`tools/neumorphism-preview.py` 会额外输出 `docs/preview/palette.png`：同一块石墨材质上并排画六支强调色
+`tools/neumorphism-preview.py` 会额外输出 `docs/preview/.local/palette.png`：同一块石墨材质上并排画六支强调色
 （海报卡细环 / 选中胶囊 / 亮面焦点按钮 / 当前页图标 / 选集当前集 / 进度条 / 名次星标 / 强调色文字），
 第一列就是上一版的品牌蓝，用来对照「为什么换」。
 
@@ -111,14 +111,14 @@
 
 1. 改 `TvTheme.kt` 里对应主题的色值与 `tools/theme-preview.py` 顶部的同一张表，
    两处必须一一对应（`tools/verify-button-system.py` 第 15 条会核对每个色值）；
-2. 跑 `python3 tools/theme-preview.py`，看 `docs/preview/themes.png`：先确认三档材质分得开，
+2. 跑 `python3 tools/theme-preview.py`，看 `docs/preview/theme.png`：先确认三档材质分得开，
    再确认「常态 / 按进去 / 打亮」三个台阶在浅色底与深色底上都读得出来；
 3. 强调色只做线与小色块，过一遍非文字 3:1 即可；文字基色对底色要过 WCAG AA（4.5:1）；
 4. `tools/neumorphism-preview.py` 顶部的色板是**深邃暗调**那一套的镜像，改了深色主题要同步；
 5. `app/src/main/res/values/styles.xml` 的 `windowBackground` / `colorAccent` 跟着改
    （启动第一帧的兜底配色）；**桌面图标与电视桌面卡片不在运行时主题里**，由
    `tools/app-icon.py` 生成——改色改脚本顶部的材质表，再跑 `python3 tools/app-icon.py
-   --emit-vector` 重出矢量与位图，没有设备时的校对图是 `docs/preview/icon.png`。
+   --emit-vector` 重出矢量与位图，没有设备时的校对图是 `docs/preview/.local/icon.png`。
 
 ### 为什么焦点不是「强调色实心块」
 
@@ -253,7 +253,7 @@
 
 #### 怎么复核
 
-`python3 tools/theme-preview.py` 会输出 `docs/preview/themes.png`：十四套材质排成 7 列 × 2 行，
+`python3 tools/theme-preview.py` 会输出 `docs/preview/theme.png`：十四套材质排成 7 列 × 2 行，
 每列画出三档材质色块、三个状态台阶（常态 / 按进去 / 打亮）、海报卡的常态与焦点、
 强调色只做线的三个例子、以及四级文字。它用的是与 `TvTheme.kt` 相同的派生公式，
 `tools/verify-button-system.py` 会核对两边的色值表——改色时先重跑这张图，
@@ -314,12 +314,11 @@
 
 没有设备时用 `tools/neumorphism-preview.py` 校对观感：它用 PIL + numpy 复刻
 [SoftDrawable] 的绘制顺序（柔光 = 形状的模糊剪影 + 偏移、凹陷 = 两条 45° 渐变裁剪到面板内、
-暗角 = 径向渐变），令牌数值与 `TvStyle.kt` 一一对应，输出 `docs/preview/home.png`、`docs/preview/sheet.png`
-与 `docs/preview/palette.png`（六支强调色候选并排，第一列是上一版的品牌蓝）。
+暗角 = 径向渐变），令牌数值与 `TvStyle.kt` 一一对应，输出 `docs/preview/.local/home.png`、`docs/preview/.local/sheet.png` 与 `docs/preview/.local/palette.png`（六支强调色候选并排，第一列是上一版的品牌蓝）。
 
 ```sh
 python3 tools/neumorphism-preview.py          # 整页排版（深邃暗调那一套令牌），需要 Pillow + numpy
-python3 tools/theme-preview.py                # 十四套主题 × 状态台阶，输出 docs/preview/themes.png
+python3 tools/theme-preview.py                # 十四套主题 × 状态台阶，输出 docs/preview/theme.png
 ```
 
 这几个数值都是它比出来的（前两条是第一次改版、第三条是第二次改版，第四次改版把「细环 / 金字」
@@ -331,7 +330,7 @@ python3 tools/theme-preview.py                # 十四套主题 × 状态台阶�
   「为什么焦点不是强调色实心块」）；
 - 选中态从「18% 染色底」换成 **抬一档明度 + 金环 + 金字**：同一套配方在蓝上成立、在暖金上变成褐色泥
   （见 [第 2.1 节](#21-色板改版2026-10-07石墨--香槟金)）；
-- 强调色从品牌蓝换成香槟金：`docs/preview/palette.png` 六列并排比出来的，比在真机上逐个改值快得多。
+- 强调色从品牌蓝换成香槟金：`docs/preview/.local/palette.png` 六列并排比出来的，比在真机上逐个改值快得多。
 
 `tools/theme-preview.py` 是主题改版新增的那张：十四套材质排成 7 列 × 2 行，每格画出三档材质、
 三个状态台阶（常态 / 按进去 / 打亮）、海报卡的常态与焦点、强调色只做线的三个例子、四级文字。

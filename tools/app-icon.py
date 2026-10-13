@@ -45,7 +45,7 @@ API 26 以下的位图兜底同样铺白底。这样任何启动器、任何壁�
 与位图是同一件东西的两种实现，两边都不含渐变。
 
 用法：
-    python3 tools/app-icon.py                # 出全部位图 + docs/preview/icon.png
+    python3 tools/app-icon.py                # 出全部位图 + docs/preview/app-logo.png
     python3 tools/app-icon.py --emit-vector  # 同时重写 app_icon.xml
     python3 tools/app-icon.py --check        # 只校验：矢量 / 位图是否与脚本同源（CI 用）
 依赖：Pillow、numpy；中文用系统 PingFang / Hiragino。
@@ -403,7 +403,7 @@ def banner_image():
     w, h = BANNER
     img = graphite_plate(w, h).convert("RGBA")
     mark_h = int(round(h * 0.60))
-    mark = icon_image(mark_h, IOS_SCALE)
+    mark = icon_image(mark_h, 1.0)   # 横幅里的标志占满画布
     img.alpha_composite(mark, (int(w * 0.10), (h - mark.height) // 2))
     d = ImageDraw.Draw(img)
     f = font(62, bold=True)
@@ -654,7 +654,8 @@ def write_all(emit_vector=True):
     if emit_vector:
         save_xml(vector_xml(), os.path.join(res, "drawable", "app_icon.xml"))
 
-    save(preview_sheet(), os.path.join(PREVIEW, "icon.png"))
+    save(icon_image(512).convert("RGB"), os.path.join(PREVIEW, "app-logo.png"))
+    save(preview_sheet(), os.path.join(PREVIEW, ".local", "icon.png"))
     return made
 
 

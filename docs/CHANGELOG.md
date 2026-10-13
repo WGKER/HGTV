@@ -536,7 +536,7 @@ Toast 是独立于界面的一层浮窗：样式、字号、焦点行为都不�
 
 位图与矢量两条渲染路径同时改：`render_master()` 只剩纯色填充与一条中脉，
 `vector_xml()` 只剩 3 条路径（果身 / 果叶 `fillColor` + 中脉 `strokeColor`），
-渐变相关的辅助函数与 `<aapt:attr>` 结构整段移除。`docs/preview/icon.png` 重出，
+渐变相关的辅助函数与 `<aapt:attr>` 结构整段移除。`docs/preview/.local/icon.png` 重出，
 新增「白底 / 透明底」对照行。
 
 ### 4. 弹幕选「隐藏弹幕」时收起外观两项
@@ -662,7 +662,7 @@ Toast 是独立于界面的一层浮窗：样式、字号、焦点行为都不�
 - 透明底时图标在桌面上的观感完全由启动器决定（Lawnchair 会垫纯黑底板），
   同一张图在不同设备上会落成黑方块 / 深灰方块 / 直接贴壁纸，看起来像三个应用；
 - 白底压在启动器底板之上（实测 `background` 换白后量到 (1,1,1)），因此各设备观感一致；
-- `docs/preview/icon.png` 新增「白底 / 透明底」对照行，`tools/app-icon.py --check` 同时核对新增的
+- `docs/preview/.local/icon.png` 新增「白底 / 透明底」对照行，`tools/app-icon.py --check` 同时核对新增的
   背景色资源。
 
 ### 7. 验证与边界
@@ -672,7 +672,7 @@ Toast 是独立于界面的一层浮窗：样式、字号、焦点行为都不�
 - `:app:lintRelease` 无 error；`:app:assembleRelease` 使用与 0.9.x / 0.10.0 / 0.11.0 相同的发布签名，
   证书 SHA-256 `b237b1d3714a5a010b453e0a51ed32bceac40d8d4207c61bfdf8d6c97a0caeaa`，
   可覆盖安装并保留本机记录。
-- 预览图 `docs/preview/home.png` 随代码重出（标题去掉圆点与「更多 ›」），与真机一致。
+- 预览图 `docs/preview/.local/home.png` 随代码重出（标题去掉圆点与「更多 ›」），与真机一致。
 - 本机无可用 AVD（`system-images` 为空目录、`sdkmanager` 拉取报 `Premature EOF`），
   因此本轮没有模拟器交互复测：顶部刷新按钮在四个页面的实际手感、以及删除记录后的焦点落点，
   仍需在 Android 8 实体电视上按一遍确认。
@@ -909,7 +909,7 @@ body 的 MD5、六条线路挨个试——结果都一样，所以这是平台�
 自适应图标的 `background` 层是 `@color/ic_launcher_background`，
 API 26 以下的位图兜底与 iOS 那九张也铺同一块白底。
 矢量与位图（含 iOS 图标、电视桌面卡片）由 `python3 tools/app-icon.py` 从一份几何生成，
-没有设备时的校对图是 `docs/preview/icon.png`（含白底 / 透明底对照）。
+没有设备时的校对图是 `docs/preview/.local/icon.png`（含白底 / 透明底对照）。
 
 **为什么从透明改成白底**：透明背景时图标在桌面上的观感完全由启动器决定。模拟器上的 Lawnchair
 会给每个图标垫一块纯黑底板（深色模式），三轮实测把这件事钉死：
@@ -931,9 +931,9 @@ API 26 以下的位图兜底与 iOS 那九张也铺同一块白底。
 选集面板压在画面上的渐变背板。播放时这些元素一直压在画面上，柔光底板会和画面抢注意力。
 
 设计令牌、柔光实现、组件清单与必须保持的不变量见 [新拟态界面改版说明](UI_NEUMORPHISM.md)；
-没有设备时的观感校对走 `python3 tools/neumorphism-preview.py`，输出在 `docs/preview/`
+没有设备时的观感校对走 `python3 tools/neumorphism-preview.py`，输出在 `docs/preview/.local/`
 （`home.png` / `sheet.png` 是界面，`palette.png` 是强调色候选对照），
-十四套主题排成 7 列 × 2 行的对比图走 `python3 tools/theme-preview.py` → `docs/preview/themes.png`。
+十四套主题排成 7 列 × 2 行的对比图走 `python3 tools/theme-preview.py` → `docs/preview/theme.png`。
 本轮只改 UI 层源码，`tools/verify-button-system.py`（149 项规则）、`tools/theme-preview.py`
 （十四套主题的对比度自检）、`:core:test`、`:app:lintDebug`、`:app:assembleDebug` 全部通过；
 **实体电视上的观感、低端 GPU 帧率、十二套浅色主题在 3 米外的焦点辨识度与 4K 画布下的对比度尚未验收**

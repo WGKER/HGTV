@@ -1,4 +1,4 @@
-# 红果 TV（Android TV 原生版）_(hongguoTV)_
+# <img src="docs/preview/app-logo.png" width="64" alt="红果 TV 应用图标"> 红果 TV（Android TV 原生版）_(hongguoTV)_
 
 面向 Android TV 的短剧客户端：单 APK、Kotlin + Media3，装到电视上联网即用。
 
@@ -51,11 +51,28 @@
 ## 界面
 
 深色新拟态（Neumorphism）风格：全站只有一块材质，层次由「凸起 / 凹陷」与柔光表达；
-播放界面不套新拟态，压在画面上的字与线固定暖白，避免和画面抢注意力。
+播放界面不套新拟态，压在画面上的字与线固定暖白，避免和画面抢注意力。十四套材质主题如下：
 
-离线校对图（由 `tools/` 下脚本生成，非真机截图）在 [`docs/preview/`](docs/preview/)：
-
-![首页](docs/preview/home.png)
+<table>
+<tr>
+<td colspan="3" align="center"><img src="docs/preview/theme.png" width="100%" alt="十四套主题对比"></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/preview/1.jpg" width="100%" alt="界面截图 1"></td>
+<td align="center"><img src="docs/preview/2.jpg" width="100%" alt="界面截图 2"></td>
+<td align="center"><img src="docs/preview/3.jpg" width="100%" alt="界面截图 3"></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/preview/4.jpg" width="100%" alt="界面截图 4"></td>
+<td align="center"><img src="docs/preview/5.jpg" width="100%" alt="界面截图 5"></td>
+<td align="center"><img src="docs/preview/6.jpg" width="100%" alt="界面截图 6"></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/preview/7.jpg" width="100%" alt="界面截图 7"></td>
+<td align="center"><img src="docs/preview/8.jpg" width="100%" alt="界面截图 8"></td>
+<td align="center"><img src="docs/preview/9.jpg" width="100%" alt="界面截图 9"></td>
+</tr>
+</table>
 
 ## 安装
 
@@ -100,7 +117,7 @@ android/                Gradle 工程根（Android Studio 直接打开这一层�
 │  └─ src/test/         单元测试与固定向量
 ├─ gradle/ gradlew       Gradle 8.14.3 包装器
 └─ build.gradle.kts     构建脚本与发布签名配置
-docs/                   项目文档与离线校对图（preview/）
+docs/                   项目文档；preview/ 放应用图标、主题图与界面截图
 tools/                  图标 / 主题 / 界面校对脚本、静态校验脚本、构建脚本
 README.md NOTICE.md LICENSE
 ```
@@ -116,13 +133,14 @@ README.md NOTICE.md LICENSE
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-静态校验与离线校对图：
+静态校验与离线校对图（校对图输出到 `docs/preview/.local/`，不入库）：
 
 ```sh
 python3 tools/verify-button-system.py    # 按钮系统规则（全站唯一实现、三档尺寸、令牌化内边距）
 python3 tools/app-icon.py --check        # 矢量 / 位图 / 背景色与脚本是否同源
-python3 tools/theme-preview.py           # 十四套主题对比度自检 → docs/preview/themes.png
-python3 tools/neumorphism-preview.py     # 首页 / 按钮六态 / 强调色校对 → docs/preview/
+python3 tools/app-icon.py                # 重出应用图标、电视横幅与 docs/preview/app-logo.png
+python3 tools/theme-preview.py           # 十四套主题对比度自检 → docs/preview/theme.png
+python3 tools/neumorphism-preview.py     # 首页 / 按钮六态 / 强调色校对（仅本机查看）
 ```
 
 正式包使用独立发布密钥，**私钥与口令不入库**。重建发布包时用环境变量，或在 `android/keystore.properties` 配置：

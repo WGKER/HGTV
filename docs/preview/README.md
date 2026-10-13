@@ -1,45 +1,20 @@
-# 新拟态界面预览（离线，非真机截图）
+# 预览图（离线生成，非真机截图）
 
-这些图由两个脚本生成：它们用 PIL + numpy 复刻
-`TvSoft.kt` 里 `SoftDrawable` 的绘制顺序与 `TvTheme.kt` / `TvStyle.kt` 的令牌数值，
-用来在没有设备的情况下校对材质明度差、投影强度与焦点态的对比度。
+README 里展示的资源都在这里：
 
-- `home.png`（`tools/neumorphism-preview.py`，深邃暗调那一套令牌）：工具条（品牌只有一行加粗汉字，
-  面板外沿与内容线齐平、高度 88dp）、分区标题、一屏 6 张海报卡（第 2 张是焦点态：抬一档 + 更深的柔光 + 光晕）。
-- `sheet.png`：按钮六态（常态 / 选中 / 主操作 / 焦点 / 禁用 / 焦点+选中）、
-  圆形图标入口三态、选集网格（第 12 集是当前集、第 13 集是焦点态，两个状态并排可比）、
-  弹窗、播放设置面板，以及最下面一整条**播放界面**（标题条 / 控制层 / 进度条）——它保持原样，没有新拟态。
-- `themes.png`（`tools/theme-preview.py`）：**十四套主题排成 7 列 × 2 行**，每格画出三档材质、
-  三个状态台阶（常态 / 按进去 / 打亮）、海报卡的常态与焦点、选集网格的常态 / 当前集 / 焦点、
-  强调色只做线的三个例子、四级文字。它的色值表与 `TvTheme.kt` 一一对应，
-  `tools/verify-button-system.py` 第 15 条会核对；脚本同时会按 WCAG 公式算一遍
-  正文 / 四级文字 / 亮面上的字 / 焦点面 / 凹陷面 / 抬升面与底色的对比度，
-  低于门槛就直接报错退出，并把四套主题的实测值打在终端上。
-- `palette.png`：六支强调色候选并排（第一列是上一版的品牌蓝），2026-10-07 第二次色板改版的依据。
-  强调色现在只做线与小色块，所以这张图只比「它作为一条线好不好读」。
-- `palette-before-after.png`：改版前后的对照快照（海报架焦点框 + 播放设置面板的选中胶囊）。
-  这是**一次性快照**，`tools/neumorphism-preview.py` 只按当前色板出图，不会再生成它。
-- `icon.png`（`tools/app-icon.py`）：应用图标的校对图——三种桌面底色（浅灰 / 中灰 / 深邃暗调）
-  上的 300dp 大图、真实 48–192dp 小图两行、**白底与透明底的对照**（同一块中灰壁纸；
-  图标自 2026-10-12 起是扁平风格：果身 / 果叶两块纯色 + 一条中脉，播放三角已去掉），
-  以及电视桌面卡片 `tv_banner.png`。图标自 2026-10-12 起铺纯白不透明底（`#FFFFFF`），
-  自适应图标与位图兜底共用同一个色值资源。
-  同一份几何还会出矢量 `app_icon.xml`、五档 `ic_launcher(.round).png`（白底）、
-  背景色资源 `values/ic_launcher_background.xml`、自适应图标 XML 与 iOS 的 `AppIcon.appiconset`；
-  `python3 tools/app-icon.py --check` 会核对矢量 / 背景色 / 位图与脚本是否同源。
+- `app-logo.png`：应用图标（与 APK 内图标同一份几何，`tools/app-icon.py` 生成）。
+- `theme.png`：十四套材质主题排成 7 列 × 2 行的对比图（`tools/theme-preview.py`）。
+- `1.jpg` – `9.jpg`：界面截图。
 
-**选框不带颜色**（2026-10-07 三次改版）：焦点 = 最亮的 `lit` 面板 + `onLit` 字 + 光晕；
-选中 = 按进去（凹陷槽 + 内阴影），选集当前集与顶部当前页图标因为在凹陷背板里，改用「抬一档 / 常亮的亮面板」；
-强调色只剩进度条、名次星标两处（区块标题圆点已于 2026-10-12 去掉）。十四套主题（前四套：经典浅灰 / 优雅奶白 / 深邃暗调 /
-高级柔冷；后十套：瓷白 / 月岩灰 / 象牙沙 / 银鼠尾草 / 蓝雾 / 香槟丝绸 / 灰雾玫瑰 / 苍岩橄榄 /
-石墨 / 午夜蓝）的完整色值与派生规则见 [新拟态界面改版说明](../UI_NEUMORPHISM.md) 第 2.2 节。
+其余校对图（首页、按钮六态、强调色候选、图标白底对照）由脚本输出到 `docs/preview/.local/`，
+只在本机查看，不入库：
 
 ```sh
-python3 tools/neumorphism-preview.py    # home.png / sheet.png / palette.png（深邃暗调）
-python3 tools/theme-preview.py          # themes.png（四套主题）
-python3 tools/app-icon.py               # icon.png（图标）+ 图标 / 横幅的全部产物
+python3 tools/neumorphism-preview.py     # → .local/home.png、sheet.png、palette.png
+python3 tools/app-icon.py                # → app-logo.png 与 .local/icon.png
+python3 tools/theme-preview.py           # → theme.png
 # 都需要 Pillow + numpy；中文用系统 PingFang（macOS）
 ```
 
-**这不是 Android 渲染器的替代品**：字体、字距、真实海报、遥控器焦点移动、
-低端 GPU 上的帧率都不在这里验证，这些仍要在实体电视上验收。
+**这不是 Android 渲染器的替代品**：字体、字距、真实海报、遥控器焦点移动与低端 GPU 帧率
+都不在这里验证，这些仍要在实体电视上验收。

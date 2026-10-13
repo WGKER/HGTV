@@ -11,14 +11,14 @@
 
 这里的色板是**深邃暗调**（默认主题）那一套的镜像，状态语言与 2026-10-07 主题改版一致：
 焦点 = 打亮（`lit` + 光晕，**没有细环**）、选中 = 按进去（`inset`）或抬一档（`surfaceHigh`）、
-强调色只做线与小色块。十四套主题排成 7 列 × 2 行的对比图在 `tools/theme-preview.py`（`preview/themes.png`）。
+强调色只做线与小色块。十四套主题排成 7 列 × 2 行的对比图在 `tools/theme-preview.py`（`docs/preview/theme.png`）。
 
 用法：
-    python3 tools/neumorphism-preview.py [输出目录]     # 默认 ../docs/preview
+    python3 tools/neumorphism-preview.py [输出目录]     # 默认 ../docs/preview/.local（不入库）
 依赖：Pillow、numpy；中文用系统字体 PingFang（macOS）。
 """
 import os, sys
-OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "preview")
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "preview", ".local")
 os.makedirs(OUT, exist_ok=True)
 
 # ============ 绘制核心（对应 TvSoft.kt / TvStyle.kt） ============

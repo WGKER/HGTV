@@ -324,7 +324,7 @@ for index, raw in enumerate(THEMES):
     for i, (name, ratio) in enumerate([("正文 100%", 1.0), ("标题 84%", .84), ("次要 70%", .70), ("辅助 62%", .62)]):
         canvas.text((x0 + 6, y + i * 30), "第 12 集 · 03:41    " + name, 16, over(ink, ratio, t["base"]), i < 2)
 
-canvas.img.convert("RGB").save(os.path.join(OUT, "themes.png"))
+canvas.img.convert("RGB").save(os.path.join(OUT, "theme.png"))
 
 # ============ 派生结果自检 ============
 # 十四套主题共用同一套派生规则，因此可以用一组硬门槛把「能不能看清」钉死：

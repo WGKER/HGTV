@@ -34,7 +34,8 @@ signing.properties
 !.env.example
 secrets.properties
 
-# Local captures, downloaded media and delivery artifacts
+# Local captures, proofing sheets and delivery artifacts
+docs/preview/.local/
 /captures/
 /downloads/
 /tmp/
