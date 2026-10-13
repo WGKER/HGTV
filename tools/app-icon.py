@@ -45,7 +45,7 @@ API 26 以下的位图兜底同样铺白底。这样任何启动器、任何壁�
 与位图是同一件东西的两种实现，两边都不含渐变。
 
 用法：
-    python3 tools/app-icon.py                # 出全部位图 + docs/preview/app-logo.png
+    python3 tools/app-icon.py                # 出全部位图 + docs/preview/app-logo.png（透明底）
     python3 tools/app-icon.py --emit-vector  # 同时重写 app_icon.xml
     python3 tools/app-icon.py --check        # 只校验：矢量 / 位图是否与脚本同源（CI 用）
 依赖：Pillow、numpy；中文用系统 PingFang / Hiragino。
@@ -390,6 +390,25 @@ def icon_image(size, scale=ICON_SCALE, transparent=False, bg=None):
     return canvas
 
 
+def readme_logo(size=512, margin=0.06):
+    """README 首行用的应用图标：透明底，按可见内容裁紧后再缩到 size。
+
+    `icon_image` 按自适应图标安全区把物件缩到 0.80，画布里会留一圈空白；
+    桌面图标需要那圈余量，README 里不需要——这里裁掉空白、留一点边距即可。
+    """
+    src = icon_image(size * 2, transparent=True)          # 先在 2 倍画布上出图，裁完再缩，边缘更干净
+    box = src.getbbox()
+    if box:
+        pad = int(round(max(box[2] - box[0], box[3] - box[1]) * margin))
+        box = (max(0, box[0] - pad), max(0, box[1] - pad),
+               min(src.width, box[2] + pad), min(src.height, box[3] + pad))
+        src = src.crop(box)
+    side = max(src.width, src.height)                     # 补成正方形，避免 README 里被拉伸
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    canvas.alpha_composite(src, ((side - src.width) // 2, (side - src.height) // 2))
+    return canvas.resize((size, size), Image.LANCZOS)
+
+
 def graphite_plate(w, h, center=(0.34, 0.5)):
     """石墨径向底：中心亮一档、四角压深，没有边界线也没有圆角。"""
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
@@ -654,7 +673,7 @@ def write_all(emit_vector=True):
     if emit_vector:
         save_xml(vector_xml(), os.path.join(res, "drawable", "app_icon.xml"))
 
-    save(icon_image(512).convert("RGB"), os.path.join(PREVIEW, "app-logo.png"))
+    save(readme_logo(512), os.path.join(PREVIEW, "app-logo.png"))
     save(preview_sheet(), os.path.join(PREVIEW, ".local", "icon.png"))
     return made
 

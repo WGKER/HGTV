@@ -1,4 +1,6 @@
-# <img src="docs/preview/app-logo.png" width="64" alt="红果 TV 应用图标"> 红果 TV（Android TV 原生版）_(hongguoTV)_
+<p align="center"><img src="docs/preview/app-logo.png" width="512" alt="红果 TV 应用图标"></p>
+
+# 红果 TV（Android TV 原生版）_(hongguoTV)_
 
 面向 Android TV 的短剧客户端：单 APK、Kotlin + Media3，装到电视上联网即用。
 
