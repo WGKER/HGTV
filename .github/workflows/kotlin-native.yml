@@ -22,7 +22,7 @@ jobs:
           packages: platform-tools
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - name: Unit tests, Android lint, and installable development APK
-        run: ./gradlew -p android :core:test :app:lintDebug :app:assembleDebug --console=plain
+        run: ./android/gradlew -p android :core:test :app:lintDebug :app:assembleDebug --console=plain
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
