@@ -1,10 +1,9 @@
-name: Verify Kotlin standalone APK
+name: Verify Android TV APK
 on:
   push:
-    branches: ['codex/kotlin-standalone']
-    tags: ['kotlin-v*']
+    branches: [main]
+    tags: ['v*']
   pull_request:
-    paths: ['kotlin-tv/**', 'scripts/build-kotlin.sh', '.github/workflows/kotlin-native.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -23,12 +22,12 @@ jobs:
           packages: platform-tools
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - name: Unit tests, Android lint, and installable development APK
-        run: ./kotlin-tv/gradlew -p kotlin-tv :core:test :app:lintDebug :app:assembleDebug --console=plain
+        run: ./gradlew -p android :core:test :app:lintDebug :app:assembleDebug --console=plain
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: kotlin-native-verification
+          name: android-tv-verification
           path: |
-            kotlin-tv/core/build/reports/tests/test/
-            kotlin-tv/app/build/reports/lint-results-debug.*
-            kotlin-tv/app/build/outputs/apk/debug/*.apk
+            android/core/build/reports/tests/test/
+            android/app/build/reports/lint-results-debug.*
+            android/app/build/outputs/apk/debug/*.apk

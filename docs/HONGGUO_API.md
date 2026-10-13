@@ -12,8 +12,8 @@
 
 | 来源 | 用途 |
 | --- | --- |
-| `kotlin-tv/core`（本工程 Kotlin 实现，逐行核对） | 字段名、参数、签名与响应结构的主依据 |
-| `server/vendor/hongguo.cjs`（本工程 Node 实现，同一套接口的另一份实现） | 交叉验证官网路由名与榜单路线 |
+| `core`（本工程 Kotlin 实现，逐行核对） | 字段名、参数、签名与响应结构的主依据 |
+| `third_party/drpys/hongguo.cjs`（本工程 Node 实现，同一套接口的另一份实现） | 交叉验证官网路由名与榜单路线 |
 | Android 12 模拟器 + 系统 CA + Frida 挂钩 `SSL_write`/`SSL_read` 实测 | 验证请求头、响应压缩（brotli）与匿名采样结论 |
 | `woshishiq1/drpys`（22261ad）、`zhenyong97/hongguo-downloader` | 签名算法与协议变换的移植来源（GPL-3.0） |
 
@@ -224,6 +224,78 @@ route-key：`detail_page`。
 
 - `vid_list` 就是**分集 ID 列表，顺序即集号**，播放与弹幕都用它；
 - 客户端会校验：列表非空、每项都是 1–30 位数字、无重复，否则判为「分集数据异常」。
+
+#### 3.4.1 相关短剧（同一份 HTML 的第二段数据）
+
+页面上「相关短剧」那一栏**不在** `_ROUTER_DATA` 里，而是同一份 HTML 后面那段：
+
+```html
+<script async="" data-script-src="modern-run-window-fn" data-fn-name="mergeLoaderData"
+        data-fn-args="[&quot;detail_page&quot;,[{&quot;key&quot;:&quot;recommendations&quot;,
+          &quot;routerDataFnName&quot;:&quot;p&quot;,&quot;routerDataFnArgs&quot;:[&quot;{\&quot;videoList\&quot;:…}&quot;]}]]">
+```
+
+取值步骤（`ContentRepository.extractRecommendations`）：
+
+1. 找 `data-fn-name="mergeLoaderData"`，取它后面的 `data-fn-args="…"`（到下一个 `"` 为止）；
+2. HTML 实体反转义（`&quot;` / `&#39;` / `&lt;` / `&gt;` / `&amp;`）后 `JSON.parse` 成数组：
+   `["detail_page", [ { key:"recommendations", routerDataFnArgs:[ "<JSON 字符串>" ] } ]]`；
+3. `routerDataFnArgs[0]` **再** `JSON.parse` 一次，得到：
+
+```json
+{
+  "videoList": [ { "series_id": "…", "series_name": "…", "series_cover": "…", "tags": [ … ] } ],
+  "recommendationGroups": {
+    "strategy_version": 2,
+    "hot_list":     [ … 8 部 … ],
+    "related_list": [ … 16 部 … ]
+  }
+}
+```
+
+- 卡片字段与 3.4 / 4.1 的 `Card` 同构，直接复用同一份字段映射；
+- `related_list` 与 `videoList` 实测内容一致（16 部），取 `related_list`；缺失时退回 `videoList`；
+- `hot_list` 是同一页的「热门」栏（8 部），本工程未使用；
+- 解析失败一律返回空列表——相关短剧只是详情页的附加内容，不能影响详情本身。
+- 联调：`./android/gradlew -p android --offline :core:run --args="--related 7691228619774905368"`。
+
+#### 3.4.2 同一部剧的其它季（平台没有分季接口）
+
+平台**没有**「分季 / 系列」接口，能确认这一点的地方有三处：
+
+| 位置 | 结论 |
+| --- | --- |
+| `seriesDetail` 全字段 | 只有当前这一季，没有任何 season / series_group / album 字段 |
+| `recommendationGroups.related_list` | 是「看了这部还看什么」的推荐，不是同系列（第十三季的相关里混着别的剧） |
+| `recommendationGroups.hot_list` | 同页热门栏，与本剧无关 |
+
+可行的近似做法（`ContentRepository.seasonSiblings` + `core/SeriesSeasons.kt`）：
+
+1. **基名**：剥掉剧名尾部的季号——`第X季` / `第X部` / `X季` / `SX` / `Season X`，
+   中文数字（`十三`）与阿拉伯数字（`13`）都认，`第一季` 归一为第 1 季，没有季号算第 1 季；
+2. **沿季号逐季搜**：官网搜索 `GET /search/{关键词}` **一次只回 10 条、且忽略所有分页参数**
+   （实测 `?page=2/3`、`?page_num`、`?offset`、`?pageNo`、`?p`、`?limit` 全部返回同一批），
+   但**换关键词就是换一批**。因此按季号逐个搜：搜 1 到「当前季 + 2」的每个季号
+   （`第三季` → `第四季` → `第五季`…），中文写法优先、整轮无命中才补阿拉伯写法。
+   **不能只往上搜**：当前是最新一季时，更早的那几季只能靠搜它们自己的季号命中；
+   每个季号带回的 10 条里往往包含好几个季，逐个搜一遍就都覆盖到了。
+   另外再用完整基名搜一次（第 1 季的剧名常常就是基名），并去掉 1~3 个尾字各搜一次；
+3. **片库目录补漏**：`/category/real-drama?page=N` 每页 24 部、共 34 页（约 800 部），
+   稳定分页，是召回的最后一道保险（实测 6 页能把 13 季凑齐）。最多扫 6 页；
+   **并发**：以上请求彼此独立，二十多个串行要一分多钟（实测 1m49s），
+   因此客户端走 4 路线程池并发，整轮约 2~3s；
+4. **筛选**：候选剧名同样剥季号、全角转半角、去空白与标点后与基名**完全相同**才算同一系列
+   （否则 `咱家剑宗团宠小师妹第五季` 会被当成 `一梦青玄，团宠小师妹一剑毁天灭地` 的兄弟）；
+5. **排序**：按季号升序，季号相同按剧名兜底；
+6. **时机与缓存**：详情接口不带相关剧集（否则每次进简介页都要多等 2s 左右）；
+   客户端在**详情内容上屏之后立刻后台预取**（`prefetchRelated`），用户点开「相关剧集」时
+   通常已经就绪、不再发请求；同一部剧不重复预取（`relatedFor`），结果另按基名缓存在内存里。
+
+局限（如实写在这里，别当成平台的正式能力）：剧名写法不统一时（改名、副标题变化、
+外传与正片同名）会漏掉或混入；平台若把同一系列拆成不同基名（如
+`聚宝仙盆仙界篇` 与 `聚宝仙盆之杂灵根才是真BOSS`）也会各算一系列。
+因此客户端把这一栏做成「同系列各季 + 相关短剧」的合并列表：同系列按季号排在最前，
+之后接 `related_list` 的内容，重复的按剧集 ID 去掉。
 
 ### 3.5 官网搜索（第 1 页兜底）
 
@@ -587,6 +659,7 @@ key    = hex( ascii(work[1:33]) )        # 32 个十六进制字符 -> 16 字节
         └─ 空响应体（匿名设备）/ 失败 -> GET /search/{kw}?page=1            （第 1 页）
                                       -> GET /category/{comic|real}-drama?page=N 往后扫（第 2 页起）
 详情：GET /detail?series_id={id}                 -> seriesDetail + vid_list[]
+      └─ 同一份 HTML 的 mergeLoaderData 参数      -> recommendationGroups.related_list[]（相关短剧）
 播放：POST /novel/player/multi_video_model/v1/   -> fallback_api
       GET  {fallback_api}                        -> video_list + key_seed/spade_a
       GET  {main_url} Range: bytes=0-262143      -> 206 + moov -> 样本解密 -> 播放器
@@ -597,14 +670,14 @@ key    = hex( ascii(work[1:33]) )        # 32 个十六进制字符 -> 16 字节
 
 ```bash
 # 榜单 / 搜索 / 弹幕 三条探针
-./kotlin-tv/gradlew -p kotlin-tv --offline :core:run --args="--ranking"
-./kotlin-tv/gradlew -p kotlin-tv --offline :core:run --args="--search 聚宝 --short"
+./android/gradlew -p android --offline :core:run --args="--ranking"
+./android/gradlew -p android --offline :core:run --args="--search 聚宝 --short"
 # 搜索探针带登录态（不带 token 时匿名请求会退回官网搜索 + 片库目录）
-./kotlin-tv/gradlew -p kotlin-tv --offline :core:run --args="--search 聚宝 --short --token <x-tt-token>"
-./kotlin-tv/gradlew -p kotlin-tv --offline :core:run --args="--danmaku"
+./android/gradlew -p android --offline :core:run --args="--search 聚宝 --short --token <x-tt-token>"
+./android/gradlew -p android --offline :core:run --args="--danmaku"
 
 # 默认探针：搜索 -> 首页 -> 详情 -> 播放地址 -> 分段读取（--save 落一份首段 MP4）
-./kotlin-tv/gradlew -p kotlin-tv --offline :core:run
+./android/gradlew -p android --offline :core:run
 ```
 
 ---
@@ -640,4 +713,4 @@ key    = hex( ascii(work[1:33]) )        # 32 个十六进制字符 -> 16 字节
 
 - 签名与 `AesV3` 协议变换移植自 `woshishiq1/drpys`（commit `22261adfa31435e3b3ef5a730b8a2a75bcaf1715`，GPL-3.0）。
 - 内容协议与加密处理移植自 `drpys`，`MediaCrypto` 在此基础上做了 Kotlin 适配。
-- 本工程以 GPL-3.0 发布，见 `kotlin-tv/NOTICE.md`。
+- 本工程以 GPL-3.0 发布，见 `NOTICE.md`。

@@ -1,39 +1,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <uses-permission android:name="android.permission.INTERNET" />
-
-    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-    <uses-feature android:name="android.hardware.faketouch" android:required="false" />
-    <uses-feature android:name="android.software.leanback" android:required="false" />
-
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-feature android:name="android.software.leanback" android:required="false"/>
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
     <!--
-      图标走自适应图标（mipmap-anydpi-v26）：背景层透明，Android 8.0+ 的启动器因此不会给
-      图标垫那块白底圆角板。电视桌面卡片换成与原生版同一张 tv_banner.png（旧的 tv_brand.xml
-      是上一版平色图标的矢量横幅，已删除）。
+      图标走自适应图标（mipmap-anydpi-v26）：背景层是纯白不透明（@color/ic_launcher_background），
+      前景是扁平风格的 Apple 标志（果身 + 果叶两块纯色），因此 Android 8.0+ 与 API 26 以下的兜底位图
+      在桌面上是同一块白底 + 同一颗果子，不再由启动器决定底色（透明背景时不同启动器会垫黑 / 深灰底板）。
+      前景 @drawable/app_icon 已经把物件缩进安全区，圆形 / 圆角方形遮罩都切不到果叶尖。
     -->
-    <application
-      android:name=".MainApplication"
-      android:label="@string/app_name"
-      android:icon="@mipmap/ic_launcher"
-      android:roundIcon="@mipmap/ic_launcher_round"
-      android:usesCleartextTraffic="true"
-      android:allowBackup="false"
-      android:theme="@style/AppTheme"
-      android:banner="@drawable/tv_banner"
-      android:supportsRtl="true">
-      <activity
-        android:name=".MainActivity"
-        android:label="@string/app_name"
-        android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
-        android:launchMode="singleTask"
-        android:screenOrientation="landscape"
-        android:windowSoftInputMode="adjustResize"
-        android:exported="true">
-        <intent-filter>
-            <action android:name="android.intent.action.MAIN" />
-            <category android:name="android.intent.category.LAUNCHER" />
-            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-        </intent-filter>
-      </activity>
+    <application android:label="红果 TV 原生版" android:theme="@style/AppTheme" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:banner="@drawable/tv_banner" android:allowBackup="false" android:enableOnBackInvokedCallback="false" android:usesCleartextTraffic="true" android:networkSecurityConfig="@xml/network_security_config" android:supportsRtl="true">
+        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTop">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LEANBACK_LAUNCHER"/></intent-filter>
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity>
     </application>
 </manifest>

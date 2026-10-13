@@ -7,12 +7,12 @@
 
 | 位置 | 说明 |
 | --- | --- |
-| `server/vendor/hongguo.cjs` | 参考实现（JS），逐行核对的原型 |
-| `kotlin-tv/core/src/main/kotlin/com/hongguotv/core/Signer.kt` | Android/TV 端 Kotlin 移植，**只发 branch 0** |
-| `kotlin-tv/core/src/main/kotlin/com/hongguotv/core/AesV3.kt` | medusa 用的分组变换 |
-| `kotlin-tv/core/src/main/kotlin/com/hongguotv/core/Bytes.kt` | SM3 / MD5 / 端序 / 位运算原语 |
-| `kotlin-tv/core/src/main/kotlin/com/hongguotv/core/VendorConstants.kt` | 设备参数、UA、sbox、hashTable |
-| `kotlin-tv/core/src/test/resources/signing.json` | 固定向量（由 `kotlin-tv/tools/signing-oracle.cjs` 生成） |
+| `third_party/drpys/hongguo.cjs` | 参考实现（JS），逐行核对的原型 |
+| `core/src/main/kotlin/com/hongguotv/core/Signer.kt` | Android/TV 端 Kotlin 移植，**只发 branch 0** |
+| `core/src/main/kotlin/com/hongguotv/core/AesV3.kt` | medusa 用的分组变换 |
+| `core/src/main/kotlin/com/hongguotv/core/Bytes.kt` | SM3 / MD5 / 端序 / 位运算原语 |
+| `core/src/main/kotlin/com/hongguotv/core/VendorConstants.kt` | 设备参数、UA、sbox、hashTable |
+| `core/src/test/resources/signing.json` | 固定向量（由 `tools/signing-oracle.cjs` 生成） |
 
 移植上游：`woshishiq1/drpys` commit `22261adfa31435e3b3ef5a730b8a2a75bcaf1715`（GPL-3.0）。
 
@@ -338,10 +338,10 @@ query 编码：`encodeURIComponent` 风格，空格用 `%20`，`~` 不转义（K
 
 ```bash
 # 1) 用固定 seed 从上游 JS 重新生成向量（ts 1800500000..1800500011，12 组）
-node kotlin-tv/tools/signing-oracle.cjs
+node tools/signing-oracle.cjs
 
 # 2) Kotlin 侧逐组比对 branch / hashF13 / gorgon / helios / medusa
-cd kotlin-tv && ./gradlew :core:test --tests 'com.hongguotv.core.SignerTest'
+./android/gradlew -p android :core:test --tests 'com.hongguotv.core.SignerTest'
 ```
 
 向量覆盖：有 body / 无 body、12 个连续时间戳，`hashF13` 输出 hex、`gorgon` 40 位 hex、
@@ -353,13 +353,12 @@ cd kotlin-tv && ./gradlew :core:test --tests 'com.hongguotv.core.SignerTest'
 
 ## 11. 联网实测结论（2026-10-09）
 
-实测方式：`kotlin-tv/core/src/test/kotlin/com/hongguotv/core/LiveSigningProbeTest.kt`（Kotlin 签名器直接发真请求）
-＋ 同一批对照实验用 `server/vendor/hongguo.cjs` 逐头篡改后重发，观察平台判定。
+实测方式：`core/src/test/kotlin/com/hongguotv/core/LiveSigningProbeTest.kt`（Kotlin 签名器直接发真请求）
+＋ 同一批对照实验用 `third_party/drpys/hongguo.cjs` 逐头篡改后重发，观察平台判定。
 
 ```bash
-cd kotlin-tv
 JAVA_HOME=$(/usr/libexec/java_home -v 17) HONGGUO_LIVE=1 \
-  ./gradlew --offline :core:test --tests 'com.hongguotv.core.LiveSigningProbeTest' --info
+  ./android/gradlew -p android --offline :core:test --tests 'com.hongguotv.core.LiveSigningProbeTest' --info
 ```
 
 不设 `HONGGUO_LIVE=1` 时该测试自动跳过，离线构建不受影响。

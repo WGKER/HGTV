@@ -9,8 +9,6 @@ local.properties
 .kotlin/
 build/
 dist/
-node_modules/
-.venv/
 __pycache__/
 *.py[cod]
 *.apk
@@ -19,7 +17,6 @@ __pycache__/
 # Local credentials and signing material
 .env
 .env.*
-!.env.example
 *.jks
 *.keystore
 keystore.properties
@@ -29,10 +26,7 @@ keystore.properties
 /downloads/
 /tmp/
 
-# Delivery artifacts, native intermediates, local runtime
+# Delivery artifacts and native intermediates
 /outputs/
-/server/.local/
 .cxx/
 .externalNativeBuild/
-/ios/Pods/
-/ios/build/
