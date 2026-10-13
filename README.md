@@ -125,6 +125,7 @@ python3 tools/app-icon.py --check        # 矢量 / 位图 / 背景色与脚本�
 python3 tools/app-icon.py                # 重出应用图标、电视横幅与 docs/preview/app-logo.png
 python3 tools/theme-preview.py           # 十四套主题对比度自检 → docs/preview/theme.png
 python3 tools/neumorphism-preview.py     # 首页 / 按钮六态 / 强调色校对（仅本机查看）
+python3 tools/maintainer-avatars.py --check  # 维护者头像是否为 256px 圆形透明底
 ```
 
 正式包使用独立发布密钥，**私钥与口令不入库**。重建发布包时用环境变量，或在 `android/keystore.properties` 配置：
@@ -147,9 +148,9 @@ keyPassword=your-password
 
 <table>
 <tr>
-<td align="center"><a href="https://github.com/pan8664716"><img src="docs/maintainers/pan8664716.png" width="80" alt="pan8664716"><br><sub><b>pan8664716</b></sub></a></td>
-<td align="center"><a href="https://github.com/N3urda"><img src="docs/maintainers/N3urda.png" width="80" alt="N3urda"><br><sub><b>N3urda</b></sub></a></td>
-<td align="center"><a href="https://github.com/ermilylu"><img src="docs/maintainers/ermilylu.png" width="80" alt="ermilylu"><br><sub><b>ermilylu</b></sub></a></td>
+<td align="center"><a href="https://github.com/pan8664716"><img src="docs/maintainers/pan8664716.png" width="88" alt="pan8664716"><br><sub><b>pan8664716</b></sub></a></td>
+<td align="center"><a href="https://github.com/N3urda"><img src="docs/maintainers/N3urda.png" width="88" alt="N3urda"><br><sub><b>N3urda</b></sub></a></td>
+<td align="center"><img src="docs/maintainers/ermilylu.png" width="88" alt="ermilylu"><br><sub><b>ermilylu</b></sub></td>
 </tr>
 </table>
 
