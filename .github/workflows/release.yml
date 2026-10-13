@@ -4,10 +4,16 @@ name: Release Android TV APK
 #   两个都变了 → 打包并发布 Release（tag = v<版本号>）
 #   只有其中一个变 → 失败，提示必须同时改
 #   都没变        → 跳过，不打包
+# 手动触发时可选 force=true，跳过比对直接发布当前版本（补发失败 Release 用）。
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      force:
+        description: 跳过版本比对，直接打包并发布当前版本（用于补发失败的 Release）
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -34,6 +40,11 @@ jobs:
         with:
           fetch-depth: 0            # 需要上一个提交来对比版本
 
+      - name: 手动强制发布
+        id: forced
+        if: github.event_name == 'workflow_dispatch' && inputs.force
+        run: echo "force=true，跳过版本比对。"
+
       - name: 读取当前版本
         id: current
         run: |
@@ -54,6 +65,11 @@ jobs:
           GRADLE_FILE: android/app/build.gradle.kts
         run: |
           set -euo pipefail
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "force=true，视为版本已变动。"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # 上一次推送前的提交；新分支或手动触发时回落到 HEAD~1
           previous=""
           if [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
