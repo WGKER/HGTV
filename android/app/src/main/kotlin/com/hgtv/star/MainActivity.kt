@@ -2003,8 +2003,9 @@ class MainActivity: Activity() {
                 library.searchToken=""; applySessionToken(); session.text=sessionLabel()
             })
         }
-        // 「版本与更新」：打开更新弹窗，可以手动检查、下载并交给系统安装；
-        // 自动检查只在应用前台浏览时进行，播放中不打扰（见 AppUpdater）。
+        // 「版本与更新」：打开更新弹窗，可以手动检查、下载并交给系统安装。
+        // 有新版本时进入应用会主动提示一次；选过「暂不更新」后不再主动提示，
+        // 直到装上任何新版本（见 AppUpdater.declined）。
         lateinit var versionRow: TvButton
         versionRow=setting(device,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") {
             appUpdater.show(versionRow)
@@ -2100,19 +2101,15 @@ class MainActivity: Activity() {
     private fun licenseText(): String = listOf(
         "红果TV ${BuildConfig.VERSION_NAME} · GPL-3.0-only",
         "",
-        "完整源码与许可证全文：github.com/pan8664716/HGTV",
-        "  技术栈：Kotlin + Android 原生 View + Media3",
-        "  许可证：根目录 LICENSE（GPL-3.0），第三方来源见 NOTICE.md",
-        "  下载：仓库 Releases（APK 与源码附件）",
+        "源码与许可证：github.com/pan8664716/HGTV",
+        "  许可证全文见 LICENSE，第三方声明见 NOTICE.md",
         "",
         "内容协议与加密处理移植自 drpys（commit 22261ad，GPL-3.0）。",
         "",
-        "第三方组件：",
-        "  AndroidX Media3 / OkHttp / Kotlin：Apache-2.0",
-        "  ZXing core：Apache-2.0",
-        "  Bouncy Castle：MIT",
-        "  jsoup：MIT",
-        "  Microsoft Fluent Emoji（弹幕表情图）：MIT",
+        "第三方组件（完整清单见 NOTICE.md）：",
+        "  Kotlin / AndroidX Media3 / OkHttp / ZXing：Apache-2.0",
+        "  Bouncy Castle / jsoup / Microsoft Fluent Emoji：MIT",
+        "  desugar_jdk_libs：GPL-2.0 with Classpath Exception",
         "",
         "本机记录（收藏 / 观看进度 / 设置）只保存在这台设备上，不上传。"
     ).joinToString("\n")
