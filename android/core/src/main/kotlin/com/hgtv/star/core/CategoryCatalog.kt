@@ -18,10 +18,10 @@ data class CategoryGroup(val label: String, val path: String, val tags: List<Cat
  * | 大类 | 目录 | 小类数 |
  * | --- | --- | --- |
  * | 漫剧 | `/category/comic-drama` | 全部 + 8 |
- * | 真人剧 | `/category/real-drama` | 全部 + 24 |
+ * | 真人 | `/category/real-drama` | 全部 + 24 |
  * | AI剧 | `/category/ai-drama` | 全部 + 8 |
  *
- * 每本目录都是 24 部一页（真人剧的少数小类不足一页），`pagination.totalPages` 由服务端给出。
+ * 每本目录都是 24 部一页（真人的少数小类不足一页），`pagination.totalPages` 由服务端给出。
  */
 object CategoryCatalog {
     private fun tags(path: String, vararg entries: Pair<String,String>) =
@@ -31,7 +31,9 @@ object CategoryCatalog {
         CategoryGroup("漫剧","comic-drama",tags("comic-drama",
             "脑洞" to "creative","玄幻" to "fantasy","剧情" to "drama","末世" to "apocalypse",
             "豪门" to "wealthy-family","奇幻" to "wonder","科幻" to "sci-fi","冒险" to "adventure")),
-        CategoryGroup("真人剧","real-drama",tags("real-drama",
+        // 大类名写「真人」而不是「真人剧」：与榜单页那四枚芯片（漫剧 / 短剧 / 真人 / AI）同一套写法，
+        // 两个页面上同一个片库分类的名字因此一致。
+        CategoryGroup("真人","real-drama",tags("real-drama",
             "爱情" to "romance","年代" to "period","逆袭" to "comeback","传奇" to "legend",
             "成长" to "growth","家庭" to "family","家族" to "clan","萌宝" to "cute-kids",
             "悬疑" to "suspense","惊悚" to "thriller","恐怖" to "horror","志怪" to "supernatural",

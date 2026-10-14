@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.TextUtils
 import android.view.Gravity
@@ -18,6 +19,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.hgtv.star.core.Series
+import com.hgtv.star.core.SeriesSeasons
 
 internal fun Context.tvDp(value: Number) = (value.toFloat() * resources.displayMetrics.density).toInt()
 
@@ -381,6 +383,47 @@ internal class IconButton(
 }
 
 /**
+ * 海报底边那条已播进度条。
+ *
+ * 原先用 `LinearLayout + 两个 weight 子 View` 表达「已播 / 未播」：一张卡多两个 View，
+ * 而且每次改进度都要写 layoutParams、两次 requestLayout。这里改成自绘——
+ * 一张卡只占一个 View，改进度只是重画（[percent] 变了才 invalidate）。
+ */
+internal class PosterProgress(context: Context) : View(context) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val radius = context.tvDp(TvStyle.RADIUS_POSTER).toFloat()
+    private val track = RectF()
+
+    /** 已播百分比（0..100）；只有真的变了才重画。 */
+    var percent: Int = 0
+        set(value) {
+            val next = value.coerceIn(0, 100)
+            if (next == field) return
+            field = next
+            invalidate()
+        }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        track.set(0f, 0f, w.toFloat(), h.toFloat())
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        if (width <= 0 || height <= 0) return
+        // 底槽：只圆下面两角（与海报圆角对齐）。
+        paint.color = TvStyle.wellDeep
+        canvas.drawRoundRect(track, radius, radius, paint)
+        // 已播段：只圆左下角。
+        val filled = width * (percent / 100f)
+        if (filled > 0f) {
+            paint.color = TvStyle.accent
+            canvas.drawRoundRect(RectF(0f, 0f, filled, height.toFloat()), radius, radius, paint)
+        }
+    }
+}
+
+/**
  * 竖版海报卡：一块凸起底板，里面嵌着海报井（内暗角）、角标、进度条与两行文字。
  *
  * 卡片的焦点态和按钮不同：卡里是图片，底板换不成亮面，因此焦点由「抬一档 + 更深的柔光
@@ -401,16 +444,31 @@ internal class PosterCard(
 ) : LinearLayout(context) {
     private val dp = { value: Number -> context.tvDp(value) }
     private val band = context.softBand()
+    /**
+     * 这一张卡**现在**是谁。
+     *
+     * 分类页的栅格是固定窗口 + 行复用（见 `MainActivity.syncGridWindow`）：卡片会被滚出窗口、
+     * 回收、再拿去显示别的剧集，因此监听器里不能再捕获某一次的 item，
+     * 一律通过这个字段取「当前绑定的是哪一部」。
+     */
+    var series: Series? = null
     val image = ImageView(context)
     // 卡片下方的剧名与状态：字号比正文小一档，一屏六列时不会盖过海报本身。
     val title = context.tvText("", 14f, TvStyle.textDim, bold = true)
     val status = context.tvText("", 12f, TvStyle.textDim)
     private val poster = FrameLayout(context)
+    /** 右下角角标：名次 / 平台自己的角标 / 同系列的「第 N 季」/「正在看」。 */
     private val badge = TextView(context)
-    private val badgeScrim = View(context)
-    private val track = LinearLayout(context)
-    private val fill = View(context)
-    private val rest = View(context)
+    /**
+     * 右上角角标：这一部是**第几季**。
+     *
+     * 季号从剧名里读（见 [SeriesSeasons.badge]）：平台没有分季接口，剧名是唯一的来源，
+     * 因此没有写季号的剧名按第 1 季标，让每张卡都能一眼读出季数。
+     * 与右下角那枚共用一套字号、字重、压暗层与内边距，只是一左一右。
+     */
+    private val season = TextView(context)
+    /** 已播进度条：自绘，一张卡只占一个 View（原先的 track/fill/rest 是三个）。 */
+    private val progress = PosterProgress(context)
     private var percent = -1
     private var cover = ""
 
@@ -428,7 +486,8 @@ internal class PosterCard(
         roundCorners(poster, TvStyle.RADIUS_POSTER)
         image.scaleType = ImageView.ScaleType.CENTER_CROP
         image.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        roundCorners(image, TvStyle.RADIUS_POSTER)
+        // 海报自己的圆角裁剪**不再单独挂一个 outline**：`poster` 已经 clipToOutline，
+        // 子控件画在它的画布里，同样被裁成圆角。一张卡少一个 OutlineProvider 与一层硬件裁剪。
         poster.addView(image, FrameLayout.LayoutParams(-1, -1))
 
         // 井口暗角：压在封面上的一层，让海报看起来嵌进底板。
@@ -440,36 +499,42 @@ internal class PosterCard(
             FrameLayout.LayoutParams(-1, -1)
         )
 
-        badgeScrim.background = TvStyle.scrim(context, Color.TRANSPARENT, 0x99000000.toInt())
-        poster.addView(
-            badgeScrim,
-            FrameLayout.LayoutParams(-1, dp(56), Gravity.BOTTOM)
-        )
+        // 进度条：一个自绘 View 画「底槽 + 已播段」，替代原来的 track/fill/rest 三个 View。
+        progress.visibility = View.GONE
+        poster.addView(progress, FrameLayout.LayoutParams(-1, dp(4), Gravity.BOTTOM))
 
-        track.orientation = LinearLayout.HORIZONTAL
-        track.visibility = View.GONE
-        track.background = TvStyle.bottomRounded(context, TvStyle.wellDeep, 0)
-        fill.background = TvStyle.bottomLeftRounded(context, TvStyle.accent, 0)
-        track.addView(fill, LinearLayout.LayoutParams(0, -1).apply { weight = 1f })
-        track.addView(rest, LinearLayout.LayoutParams(0, -1).apply { weight = 1f })
-        poster.addView(track, FrameLayout.LayoutParams(-1, dp(4), Gravity.BOTTOM))
-
-        badge.textSize = 18f
-        // 角标压在封面上、底下是一条 60% 黑的压暗层，因此**不跟主题**：
-        // 浅色主题下 TvStyle.text 是深墨，压在黑压暗层上会完全看不见（同播放界面的规则）。
-        badge.setTextColor(TvStyle.playerText)
-        badge.includeFontPadding = false
-        badge.setTypeface(badge.typeface, Typeface.BOLD)
-        badge.gravity = Gravity.BOTTOM or Gravity.END
-        badge.setShadowLayer(5f, 0f, 2f, 0x80000000.toInt())
-        badge.setPadding(dp(6), dp(3), dp(8), dp(3))
-        badge.visibility = View.GONE
+        // 两枚角标共用一套样式：同样的字号、字重、压暗层与内边距，只是一左一右。
+        // 压在封面上，因此**不跟主题**：浅色主题下 TvStyle.text 是深墨，
+        // 压在黑压暗层上会完全看不见（同播放界面的规则）。
+        listOf(badge to false, season to true).forEach { (view, top) ->
+            view.textSize = TvStyle.POSTER_BADGE_TEXT
+            view.setTextColor(TvStyle.playerText)
+            view.includeFontPadding = false
+            view.setTypeface(view.typeface, Typeface.BOLD)
+            view.gravity = if (top) Gravity.TOP or Gravity.END else Gravity.BOTTOM or Gravity.END
+            // 压暗层就是角标自己的背景（原先是一个单独的 View 压在下面）：
+            // 少一个 View，而且不用 `setShadowLayer`——它在 API 26/27 上会把文字整块拉进软件层再上传位图。
+            // 圆角与压暗方向都朝**贴边的那一侧**：下角标最深的一头在下、上角标最深的一头在上，
+            // 两枚读起来才像同一口井的两个角。
+            view.background = if (top) TvStyle.scrimTop(context, 0x99000000.toInt(), Color.TRANSPARENT)
+                else TvStyle.scrim(context, Color.TRANSPARENT, 0x99000000.toInt())
+            view.setPadding(dp(6), dp(3), dp(8), dp(3))
+            view.visibility = View.GONE
+        }
         poster.addView(
             badge,
             FrameLayout.LayoutParams(-1, dp(56), Gravity.BOTTOM).apply {
                 leftMargin = dp(5)
                 rightMargin = dp(5)
                 bottomMargin = dp(5)
+            }
+        )
+        // 右上角那一枚只占内容宽度（不拉满整行）：它是一枚小标签，不该在封面上铺出一条暗带。
+        poster.addView(
+            season,
+            FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+                rightMargin = dp(5)
+                topMargin = dp(5)
             }
         )
 
@@ -495,17 +560,26 @@ internal class PosterCard(
         applyFocus(false)
     }
 
-    fun bind(item: Series, statusText: String, badgeText: String, progressPercent: Int?, rankTop: Boolean) {
+    /**
+     * 绑定一张卡。
+     *
+     * [seasonBadge] 为 true 时在右上角标出季号（由剧名推出来，见 [SeriesSeasons.badge]）。
+     * 详情页的「相关剧集」那一块把它关掉：那一条剧架的右下角已经在写季号了
+     * （见 `MainActivity` 里的相关剧集分支），同一张卡的两个角写同一句话是重复。
+     */
+    fun bind(item: Series, statusText: String, badgeText: String, progressPercent: Int?, rankTop: Boolean, seasonBadge: Boolean = true) {
+        series = item
         title.text = item.title
         status.text = statusText
-        contentDescription = listOf(badgeText, item.title, statusText)
+        val seasonText = if (seasonBadge) SeriesSeasons.badge(item.title) else ""
+        season.text = seasonText
+        season.visibility = if (seasonText.isBlank()) View.GONE else View.VISIBLE
+        contentDescription = listOf(badgeText, seasonText, item.title, statusText)
             .filter { it.isNotBlank() }.joinToString("，")
         if (badgeText.isBlank()) {
             badge.visibility = View.GONE
-            badgeScrim.visibility = View.GONE
         } else {
             badge.visibility = View.VISIBLE
-            badgeScrim.visibility = View.VISIBLE
             badge.text = badgeText
             badge.setTextColor(if (rankTop) TvStyle.tips else TvStyle.playerText)
         }
@@ -517,7 +591,9 @@ internal class PosterCard(
         if (url == cover) return
         cover = url
         image.setImageDrawable(null)
-        if (url.isNotBlank()) loadCover(image, url)
+        // 空 URL 也要通知加载器：它会把这这张图原来的请求解绑、取消排队。
+        // 少了这一步，滚出窗口（或最后一行不满）的卡片会继续为一张看不见的图占着队列与网络。
+        loadCover(image, url)
     }
 
     fun setStatus(value: String) {
@@ -528,12 +604,8 @@ internal class PosterCard(
         val next = value?.coerceIn(0, 100) ?: -1
         if (next == percent) return
         percent = next
-        track.visibility = if (next < 0) View.GONE else View.VISIBLE
-        if (next < 0) return
-        (fill.layoutParams as LinearLayout.LayoutParams).weight = next.coerceAtLeast(1).toFloat()
-        (rest.layoutParams as LinearLayout.LayoutParams).weight = (100 - next).coerceAtLeast(1).toFloat()
-        fill.requestLayout()
-        rest.requestLayout()
+        progress.visibility = if (next < 0) View.GONE else View.VISIBLE
+        if (next >= 0) progress.percent = next
     }
 
     fun resizePoster(height: Int) {

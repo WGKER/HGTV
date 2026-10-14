@@ -53,11 +53,21 @@ class ArtworkLoader(context: Context) {
 
     private val main = Handler(Looper.getMainLooper())
     private val lowRam = context.applicationContext.getSystemService(ActivityManager::class.java)?.isLowRamDevice == true
-    private val cacheBytes = (if (lowRam) 4 else 8) * 1024 * 1024
+    /**
+     * 内存缓存容量。
+     *
+     * 一张 280×357 的 ARGB_8888 位图约 400 KB，一屏可见 18~24 张（约 8~10 MB）。
+     * 早先只给 4 / 8 MB——**刚好装不下一屏**，于是滚动一屏就把上一屏全挤掉，
+     * 往回滚等于全部重解码，这才是「滚动时一直看到灰卡」的直接原因。
+     * 现在按「两屏 + 余量」给：低内存 16 MB、其余 24 MB（占用上限仍受系统与 trimMemory 约束）。
+     */
+    private val cacheBytes = (if (lowRam) 16 else 24) * 1024 * 1024
     private val cache = object : LruCache<Key, Bitmap>(cacheBytes) {
         override fun sizeOf(key: Key, value: Bitmap) = value.allocationByteCount
     }
-    private val disk = ArtworkCache(File(context.applicationContext.cacheDir, "artwork-v1"))
+    // 盘里存的是「目标尺寸的 WebP」，因此 key 要带上尺寸；目录名换掉是为了
+    // 不与旧的「原图缓存」混用（旧条目是原图，解出来还要再缩一次，正是要避免的开销）。
+    private val disk = ArtworkCache(File(context.applicationContext.cacheDir, "artwork-v2"))
     // This client owns its dispatcher and pool; cancelling artwork never cancels video or catalog calls.
     private val http = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
@@ -136,6 +146,9 @@ class ArtworkLoader(context: Context) {
         }
         cancelled?.call?.cancel()
     }
+
+    /** 盘缓存的 key：同一张封面在不同槽位尺寸下各存一份缩略图（见 [ArtworkCache]）。 */
+    private fun diskKey(key: Key) = "${key.url}|${key.width}x${key.height}"
 
     private fun cancelLocked(job: Job) {
         job.cancelled = true
@@ -241,7 +254,9 @@ class ArtworkLoader(context: Context) {
     }
 
     private fun fetch(job: Job): Bitmap? {
-        val bytes = disk.get(job.key.url) ?: run {
+        // 盘里存的是目标尺寸的 WebP：命中就直接解小图，不再需要原图。
+        val cached = disk.get(diskKey(job.key))
+        val bytes = cached ?: run {
             if (job.cancelled) return null
             val call = http.newCall(Request.Builder().url(job.key.url).build())
             job.call = call
@@ -260,28 +275,73 @@ class ArtworkLoader(context: Context) {
                     }
                 }
                 if (job.cancelled) return null
-                out.toByteArray().also { disk.put(job.key.url, it) }
+                out.toByteArray()
             }
         }
         if (job.cancelled) return null
+        val bitmap = decode(bytes, job.key) { job.cancelled } ?: return null
+        // 只把**刚从网络取回来**的那一份写盘（缩略图）；命中盘缓存的路径不用再编码。
+        if (cached == null) {
+            if (job.cancelled) { bitmap.recycle(); return null }
+            encodeForDisk(bitmap)?.let { disk.put(diskKey(job.key), it) }
+        }
+        return bitmap
+    }
+
+    /**
+     * 把原始字节解成目标尺寸的位图。
+     *
+     * 两处关键优化：
+     *
+     * 1. **一次解到目标尺寸**。先 `inJustDecodeBounds` 量出源尺寸、算出 `inSampleSize`，
+     *    再让 `BitmapFactory` 用 `inScaled + inDensity/inTargetDensity` 直接产出目标尺寸——
+     *    不再「解出接近源尺寸的位图、再 `createScaledBitmap` 复制一张」。
+     *    原来那一步会在堆上同时存在两张位图（一屏 24 张就是多出约 10 MB 的瞬时峰值）。
+     * 2. 低内存机型用 RGB_565：内存与上传带宽都省一半，海报上肉眼几乎看不出差别。
+     */
+    private fun decode(bytes: ByteArray, key: Key, cancelled: () -> Boolean): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth !in 1..32768 || bounds.outHeight !in 1..32768) return null
         // Fit the entire source into the measured target. Cropping at decode time cannot be
         // undone by ImageView.FIT_CENTER and used to remove most of a portrait poster.
-        val fit = min(1.0, min(job.key.width.toDouble() / bounds.outWidth, job.key.height.toDouble() / bounds.outHeight))
+        val fit = min(1.0, min(key.width.toDouble() / bounds.outWidth, key.height.toDouble() / bounds.outHeight))
         val width = max(1, (bounds.outWidth * fit).toInt())
         val height = max(1, (bounds.outHeight * fit).toInt())
         var sample = 1
         while (bounds.outWidth / (sample * 2) >= width && bounds.outHeight / (sample * 2) >= height) sample *= 2
         if ((bounds.outWidth / sample).toLong() * (bounds.outHeight / sample) > (if (lowRam) 2 else 4) * 1024 * 1024) return null
-        val options = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 }
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = if (lowRam) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
+            // 采样后仍大于目标尺寸时，让解码器直接缩到位（一次分配、不再复制）。
+            val sampledWidth = bounds.outWidth / sample
+            val sampledHeight = bounds.outHeight / sample
+            if (sampledWidth > width || sampledHeight > height) {
+                inScaled = true
+                inDensity = sampledWidth
+                inTargetDensity = width
+            }
+        }
         val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
-        if (job.cancelled) { decoded.recycle(); return null }
-        val result = try { Bitmap.createScaledBitmap(decoded, width, height, true) }
+        if (cancelled()) { decoded.recycle(); return null }
+        val result = if (decoded.width == width && decoded.height == height) decoded
+        else try { Bitmap.createScaledBitmap(decoded, width, height, true).also { if (it !== decoded) decoded.recycle() } }
         catch (problem: Throwable) { decoded.recycle(); throw problem }
-        if (result !== decoded) decoded.recycle()
-        if (job.cancelled) { result.recycle(); return null }
+        if (cancelled()) { result.recycle(); return null }
         return result
     }
+
+    /**
+     * 把解码后的位图缩成落盘用的 WebP。
+     *
+     * 只在「这次是从网络取回来的」时候调用（命中盘缓存的路径本来就已经是小图），
+     * 因此每张封面一辈子只编码一次。编码失败就当没缓存，不影响显示。
+     */
+    private fun encodeForDisk(bitmap: Bitmap): ByteArray? = try {
+        val out = ByteArrayOutputStream(32 * 1024)
+        @Suppress("DEPRECATION") // API 26 起 WebP 有损编码可用，质量 80 足够做缩略图。
+        bitmap.compress(Bitmap.CompressFormat.WEBP, 80, out)
+        out.toByteArray()
+    } catch (_: Throwable) { null }
 }

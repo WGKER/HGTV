@@ -42,6 +42,76 @@ private const val TAB_SETTINGS=4
 /** 剧卡栅格一行放几张：与 [HomeScreen.slotWidth] 的六列一致，追加出来的行不会比首屏宽一档。 */
 private const val GRID_COLUMNS=6
 
+/**
+ * 芯片行（分类页的二级分类、搜索页的提示词）的固定高度（dp）。
+ *
+ * 紧凑档按钮底板 40dp + 两条柔光带 12dp = 52dp，上下各留 8dp 给焦点放大后的描边。
+ * 这两行**必须固定高度**：换一级分类时小类的数量会变（8 / 24 / 8），
+ * 提示词更是随输入实时增减；高度跟着内容走的话下面的卡片行会跟着上下跳。
+ */
+private const val CHIP_ROW_HEIGHT=68
+
+/**
+ * 搜索框的提示文案与它的字号。
+ *
+ * 正文是 20sp 粗体，提示跟着那么大会被截断成半句（「输入剧名或关键词（遥控器选字 / 外接…」）；
+ * 提示单独降到 [SEARCH_HINT_TEXT]，整句「怎么打字」的说明就都放得下了。
+ */
+private const val SEARCH_HINT="输入剧名或关键词 · 遥控器方向键选字，也可外接键盘"
+private const val SEARCH_HINT_TEXT=12f
+
+/**
+ * 搜索页导航栏里输入框与两个按钮的档位。
+ *
+ * 导航栏那一行还挤着四个圆形入口，输入框与按钮按常规档（48dp 底板 / 16sp）摆会太占地方：
+ * 输入框收到 [SEARCH_INPUT_HEIGHT]、按钮用紧凑档（40dp / 15sp），
+ * 整行因此矮一档、也短一档，给标题与圆形入口让出宽度。
+ * 输入框正文跟着按钮字号走（[SEARCH_INPUT_TEXT]），一行里的字读起来才是一个体系。
+ */
+private const val SEARCH_INPUT_HEIGHT=TvStyle.BUTTON_COMPACT
+private const val SEARCH_INPUT_TEXT=17f
+
+/**
+ * 搜索页导航栏里输入框的固定宽度（dp）。
+ *
+ * 原来输入框吃满中间那段弹性空间（一屏上千 dp），搜索框长得像一整条横幅；
+ * 现在给一个固定宽度，省下来的宽度让给「搜索 / 历史」与右边那排圆形入口之间的空白——
+ * 那一组控件靠左聚在一起，右边那排入口仍然贴在右边，中间留出距离。
+ */
+private const val SEARCH_INPUT_WIDTH=300
+
+/**
+ * 「搜索 / 历史」两枚按钮的最小宽度（dp）。
+ *
+ * 全站按钮默认最小宽度是 [TvStyle.BUTTON_MIN_WIDTH]（92dp），那是给「收藏」「重试」这类
+ * 整行按钮用的；这两个按钮只有两个字，按默认宽度摆出来会各占一大块，
+ * 与输入框凑在一起就把导航栏占满了。这里只对这两枚放开最小宽度，让它们按文字宽收紧。
+ */
+private const val SEARCH_BUTTON_MIN_WIDTH=0
+
+/** 搜索提示词一次取几条（接口上限 20，不传按 10）。 */
+private const val SUGGEST_COUNT=10
+
+/** 输入停顿多久才去取提示词：每敲一个字都发请求会把接口打满，也会让这一行一直闪。 */
+private const val SUGGEST_DEBOUNCE=220L
+
+/**
+ * 首帧（还没量到视口高度时）至少物化几行。
+ *
+ * 只是「先铺几行再说」的起点：第一帧布局完成后 [MainActivity.syncGridWindow] 会按真实
+ * 视口高度重算窗口，多出来的行进回收池。
+ */
+private const val GRID_WINDOW_MIN_ROWS=4
+
+/**
+ * 窗口最多物化几行（硬上限）。
+ *
+ * 视口算出来的窗口本来就只有一屏多两行；这个上限是给「必须包含某一行」那条兜底规则用的：
+ * 万一要落到的行离视口很远（恢复的焦点、跳转），**不能**把中间那几百行一次性物化出来，
+ * 而是先把列表滚过去、再按新的视口算窗口（见 `MainActivity.focusGridIndex`）。
+ */
+private const val GRID_WINDOW_MAX_ROWS=12
+
 /** 远端长列表最多向下追加到第几页（与 [ContentRepository.home] 的 `require(page in 1..100)` 对齐）。 */
 private const val MAX_CATALOG_PAGE=100
 
@@ -111,6 +181,17 @@ class MainActivity: Activity() {
     private var readySince=0L
     private lateinit var artwork: ArtworkLoader
     private data class DeferredUi(val apply: ()->Unit,val discard: ()->Unit={})
+    /**
+     * 栅格里的一行：行容器 + 它这一行里固定 [GRID_COLUMNS] 张卡片。
+     *
+     * 卡片数与行容器一一对应，因此「换一行数据」就是给这几张卡重新 [bindGridCard]，
+     * View 本身（以及它们身上的监听器、Drawable）全部复用，不再随滚动 / 追加新建。
+     * [index] 是这一行在整份列表里的行号，窗口滑动时它跟着变。
+     */
+    private class GridRow(val line: LinearLayout) {
+        var index=0
+        val cards=mutableListOf<PosterCard>()
+    }
     private var deferredWork: DeferredUi?=null
     private var initialCatalogPending=true
     private var restoreStoppedPage=false
@@ -295,8 +376,6 @@ class MainActivity: Activity() {
         // 展开到位后重新量一次真实高度，作为下一次收起 / 展开的基准。
         if(!hide) row.post { if(topArea.contains(row) && row.height>0) topAreaHeights[row]=row.height }
     }
-    private val catalogCards=linkedMapOf<String,View>()
-    private val cardImages=linkedMapOf<String,Pair<ImageView,String>>()
     private var prefetchAttemptAt=0L
     private var prefetchAttempts=0
     private var homeScreen: HomeScreen?=null
@@ -322,7 +401,13 @@ class MainActivity: Activity() {
     /** 这一集取到多少条弹幕；-1 表示还没取回来。播放界面的状态行会显示它，便于确认弹幕到底有没有到。 */
     private var danmakuCount=-1
     private lateinit var favoriteMonitor: FavoriteMonitor
-    private val favoriteBadges=mutableMapOf<String,TextView>()
+    /**
+     * 窗口化之后**不再**按剧集 id 记住「收藏状态那一行文字控件」。
+     *
+     * 卡片会被滚出窗口、回收、再拿去显示别的剧集，按 id 存下来的 TextView 引用会指到
+     * 已经换了内容的控件上。收藏标签改成「重绑当前窗口那几行」（见 [rebindGridRows]），
+     * 代价只有一屏的卡片数。
+     */
     private var favoriteCheck: TextView?=null
     private var favoriteStatus: TextView?=null
     private var episodePanel: EpisodePanel?=null
@@ -380,6 +465,15 @@ class MainActivity: Activity() {
      * 换了一份列表（换榜单 / 换分类 / 从首页剧架进榜单）就置 true，落地时落到第一张卡并清掉。
      */
     private var focusFirstCardOnLanding=false
+    /**
+     * 换榜单 / 换分类之后，焦点要留在**用户刚点的那一枚**芯片上。
+     *
+     * 芯片在页面重建时是新建的，旧引用已经离树（对它 requestFocus 一定失败），
+     * 因此这里记的是 key，重建后由 [chipControl] 查回新的那一枚。
+     * 取值 `board:<storedValue>` / `group:<path>` / `tag:<path>`；为空表示这次换列表不是「点了芯片」。
+     * 内容落地（或加载失败）时消费掉。
+     */
+    private var chipFocusKey: String?=null
     /** 剧架 key → 榜单（[HomeLayout.board]）：首页四个「热播…」栏目与排行榜页共用同一个映射。 */
     private var rankSubtitle: TextView?=null
     private var moreButton: View?=null
@@ -403,8 +497,42 @@ class MainActivity: Activity() {
     private var moreCount: TextView?=null
     /** 底部那一行当前是不是「还有下一页」的形态；只有它翻转时才需要重建这一行。 */
     private var pagingHasMore=false
-    /** 栅格里的每一行，按屏幕顺序；焦点链与追加都以它为准。 */
-    private val gridRows=mutableListOf<LinearLayout>()
+    /**
+     * 栅格是**固定窗口**：只物化视口附近那几行，行与卡片都复用。
+     *
+     * 这是「加载几百个卡片之后越来越卡」的根治手段。窗口化之前是
+     * `ScrollView + LinearLayout` 一行一个 View 全量常驻：600 张卡就是 600 行、
+     * 每行 6 张卡、每张卡 11 个 View（约 6600 个 View），一次都不回收。
+     * 于是每张卡片的成本是**永久的**：内存只增不减、每次追加 / 每次焦点移动都要在
+     * 全部卡片上过一遍（`wireGridFocus` 重写全部焦点链、`gridCards()` 全量 flatMap），
+     * 堆上活对象越多 GC 也越贵。加载越多越卡就是这么来的。
+     *
+     * 现在列表高度由两个 Space 撑出来（纯算术，不需要测量），中间只放
+     * `[gridWindowStart, gridWindowStart + gridRows.size)` 这几行。因此：
+     * View 数、每次追加的工作量、每次滚动的重排量都与「已加载多少」无关，只与屏幕高度有关。
+     */
+    private var gridWindow: LinearLayout?=null
+    private var gridTopSpacer: View?=null
+    private var gridBottomSpacer: View?=null
+    /** 当前显示的全部条目（窗口化之后不再是一行一个 View）。 */
+    private var gridItems: List<Series> = emptyList()
+    /** 一行的像素高度（含行间距），首帧量一次；两个 spacer 的高度按它算。 */
+    private var gridRowStride=0
+    /** 当前物化的第一行在整份列表里的行号；[gridRows] 与它连续。 */
+    private var gridWindowStart=-1
+    /**
+     * 正在同步窗口。
+     *
+     * [syncGridWindow] 会被三条路径重入：滚动回调、[focusGridIndex] 里的滚动 + 自己的同步、
+     * 以及 `requestFocus` 经 `ScrollView.requestChildFocus → scrollTo` 再回到滚动回调。
+     * 内层调用如果照常挪窗口，就可能把「正要获得焦点的那一行」回收掉，焦点随即落空。
+     * 用这把标志把内层调用挡掉：外层那次算出来的窗口已经包含了焦点行。
+     */
+    private var gridSyncing=false
+    /** 当前物化的行，按屏幕顺序；焦点链只在这几行之间维护。 */
+    private val gridRows=mutableListOf<GridRow>()
+    /** 回收的行：滚出窗口的行进这里，滚进来的行优先从这里取，不再新建 View。 */
+    private val gridRowPool=mutableListOf<GridRow>()
     private var gridCardWidth=0
     private var gridGap=0
     private var gridPosterHeight=0
@@ -422,6 +550,16 @@ class MainActivity: Activity() {
     private var gridPrefetchJob: java.util.concurrent.Future<*>?=null
     private val tabState=mutableMapOf<Int,CatalogState>()
     private val tabFocus=mutableMapOf<Int,String>()
+    /**
+     * 本次运行里已经进过哪些标签页。
+     *
+     * 用来判断「首次进入」：分类页与榜单页的**首次**落点是页头那枚芯片
+     * （分类页是二级分类的「全部」、榜单页是当前榜单「漫剧」），而不是内容第一张卡——
+     * 用户先要在这两页的页头挑一个，再往下看内容（见 [switchTab]）。
+     * 从首页剧架进榜单、点芯片换分类也算「进过」（见 [switchRankBoard] / [selectCategory]），
+     * 因此第二次进同一页时走原来的落点（内容第一张卡）。
+     */
+    private val tabVisited=mutableSetOf<Int>()
     private val nav=mutableListOf<View>()
     /** 排行榜页的四个榜单切换芯片（漫剧 / 短剧 / 真人 / AI）。 */
     private val boardButtons=mutableMapOf<RankBoard,View>()
@@ -433,7 +571,7 @@ class MainActivity: Activity() {
     /**
      * 分类页的大类与小类芯片。
      *
-     * 大类一行（漫剧 / 真人剧 / AI剧）、小类一行（全部 + 该大类下的小类）。
+     * 大类一行（漫剧 / 真人 / AI剧）、小类一行（全部 + 该大类下的小类）。
      * 两行都是互斥选择，点了就重新取第 1 页（分类页是「往下接」的长列表）。
      */
     private val categoryGroupButtons=mutableMapOf<CategoryGroup,View>()
@@ -441,6 +579,20 @@ class MainActivity: Activity() {
     private var searchInput: View?=null
     private var searchButton: View?=null
     private val searchActions=mutableListOf<View>()
+    // —— 搜索提示词（联想词）——
+    /**
+     * 提示词那一行（横向可滚的芯片行）与它里面的按钮。
+     *
+     * 输入框每变一次就往后台丢一次请求（[SUGGEST_DEBOUNCE] 去抖），结果回来时
+     * **只重建这一行**，不整页重画——否则每敲一个字页面都要闪一下。
+     */
+    private var suggestRow: HorizontalScrollView?=null
+    private var suggestLine: LinearLayout?=null
+    private val suggestButtons=mutableListOf<View>()
+    /** 这一行的请求令牌：晚回来的旧结果直接丢掉，不会盖住新关键词的提示词。 */
+    private val suggestToken=java.util.concurrent.atomic.AtomicLong(0)
+    private var suggestJob: java.util.concurrent.Future<*>?=null
+    private val suggestRun=java.util.concurrent.atomic.AtomicReference<Runnable?>(null)
     private var historyManage: View?=null
     private var detail: Detail?=null
     private var episodeIndex=0
@@ -518,6 +670,14 @@ class MainActivity: Activity() {
      */
     private fun pageBleed()=dp(TvStyle.FOCUS_BLEED)
     private fun lp(w: Int=LinearLayout.LayoutParams.MATCH_PARENT,h: Int=LinearLayout.LayoutParams.WRAP_CONTENT)=LinearLayout.LayoutParams(w,h)
+    /**
+     * 内容区一行卡片的可用宽度（就是栅格铺满一行的宽度）。
+     *
+     * 页面左右各让出 [pageInset]，再各留 [TvStyle.FOCUS_BLEED] 的一半余量，
+     * 因此一行 6 张卡的左右边界就是「内容线 → 内容线 + 这个宽度」。
+     * 分类页二级分类那一行也按它定宽，两块区域因此左右对齐。
+     */
+    private fun gridContentWidth()=(resources.displayMetrics.widthPixels-2*pageInset()-2*dp(2)).coerceAtLeast(dp(320))
     /**
      * 新拟态底板：凸起 / 凹陷 / 只描边 / 压图暗角。
      * 参数顺序固定，调用方一律用具名参数，避免把 band 和 radius 写反。
@@ -614,7 +774,7 @@ class MainActivity: Activity() {
         library.loadAsync(onFailure={ problem ->
             if(!isDestroyed) { libraryLoadError=problem; if(foreground) showLibraryError(problem) }
         }) {
-            if(!isDestroyed && foreground) { applySessionToken(); applySavedCategory(); showCatalog(load=true); favoriteMonitor.check() }
+            if(!isDestroyed && foreground) { applySessionToken(); showCatalog(load=true); favoriteMonitor.check() }
         }
     }
     /**
@@ -622,14 +782,6 @@ class MainActivity: Activity() {
      * 设置里改完立刻作用于后面的搜索请求。
      */
     private fun applySessionToken() { repository.sessionToken=library.searchToken.ifBlank { null } }
-    /**
-     * 恢复上次选中的分类。存的是 `CategoryCatalog` 里的路径，认不出（站点改了标签、
-     * 或从没选过）就退回默认的「漫剧 · 全部」——分类页永远有一个合法的选中项。
-     */
-    private fun applySavedCategory() {
-        val saved=library.categoryPath
-        categoryPath=if(saved.isNotBlank() && CategoryCatalog.groupOf(saved)!=null) saved else CategoryCatalog.defaultTag.path
-    }
     private fun base(title: String?=null): LinearLayout {
         root.removeAllViews(); root.setBackgroundColor(bg)
         val container=column().apply { clipChildren=false; clipToPadding=false }
@@ -643,6 +795,10 @@ class MainActivity: Activity() {
             container.addView(heading)
         }
         return container
+    }
+    /** 预取下一行的封面：只排队，不抢当前可见卡片的队列位置。 */
+    private fun prefetchCover(view: ImageView,url: String) {
+        artwork.load(view,url,ArtworkLoader.PRIORITY_PREFETCH)
     }
     private fun loadCover(view: ImageView,url: String) {
         var ancestor: View?=view
@@ -664,19 +820,27 @@ class MainActivity: Activity() {
     }
     private fun releaseCatalogViews() {
         homeScreen?.let { homePosition=it.capturePosition() }
+        // 换榜单 / 换分类时 [catalogPageKey] 还是**上一条列表**的 key（它要到 catalogGrid 里才重算），
+        // 因此这里照记没错：记的是上一条列表自己的浏览位置，用户切回来时还能回到原处。
         catalogScroll?.let { rememberScroll(catalogPageKey,it.scrollY) }
         catalogBody=null
         homeScreen=null; catalogScroll=null
         nav.clear(); boardButtons.clear()
         categoryGroupButtons.clear(); categoryTagButtons.clear()
         searchInput=null; searchButton=null; searchActions.clear()
-        historyManage=null; rankSubtitle=null; moreButton=null; favoriteBadges.clear()
+        // 提示词那一行连同在途的请求一起作废：它属于上一页的输入框，换页后不该再往新页面里塞。
+        suggestRun.getAndSet(null)?.let { main.removeCallbacks(it) }
+        suggestJob?.cancel(true); suggestJob=null
+        suggestToken.incrementAndGet()
+        suggestRow=null; suggestLine=null; suggestButtons.clear()
+        historyManage=null; rankSubtitle=null; moreButton=null
         favoriteCheck=null; favoriteStatus=null
-        catalogCards.clear(); cardImages.clear()
         // 栅格连同它的追加状态一起作废：在途的预取结果不能再往新页面上接。
         gridPrefetchJob?.cancel(true); gridPrefetchJob=null
         gridList=null; gridScroll=null; gridPaging=null; moreCount=null; pagingHasMore=false
-        gridRows.clear(); gridCardWidth=0; gridGap=0; gridPosterHeight=0
+        gridWindow=null; gridTopSpacer=null; gridBottomSpacer=null
+        gridItems=emptyList(); gridRowStride=0; gridWindowStart=-1
+        gridRows.clear(); gridRowPool.clear(); gridCardWidth=0; gridGap=0; gridPosterHeight=0
         moreInFlight=false; moreInFlightPage=0; moreVisible=false; moreFocusWanted=false; moreFailed=false
         // 页头收展状态：同一页原地追加（加载更多）保留，其余换页都从展开态开始。
         val keepTopArea=keepTopAreaState
@@ -714,19 +878,30 @@ class MainActivity: Activity() {
         }
     }
     private fun message(parent: LinearLayout,label: String) { parent.addView(text(label,17f,muted).apply { setPadding(pageBleed(),dp(28),pageBleed(),dp(18)) }) }
-    private fun error(parent: LinearLayout,problem: Throwable,retry: ()->Unit) {
+    /** 加载失败时的说明 + 「重试」按钮；返回那枚按钮，调用方可以把它接进自己的焦点链。 */
+    private fun error(parent: LinearLayout,problem: Throwable,retry: ()->Unit): TvButton {
         message(parent,"暂时无法加载，请检查网络后重试。")
         val detail=if(problem is java.net.UnknownHostException) "无法连接内容网站" else if(problem is java.net.SocketTimeoutException) "连接超时" else problem.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(160)
         parent.addView(text(detail,13f,muted).apply { setPadding(pageBleed(),0,pageBleed(),0) })
         // 重试按钮与上面的提示文字共用同一条内容线：纵向间距由 addButton 给，横向自己补回焦点余量。
-        addButton(parent,"重试",onClick=retry).apply { (layoutParams as LinearLayout.LayoutParams).leftMargin=pageBleed(); requestFocus() }
+        return addButton(parent,"重试",onClick=retry).apply { (layoutParams as LinearLayout.LayoutParams).leftMargin=pageBleed(); requestFocus() }
     }
     private fun switchTab(next: Int) {
+        // 本次运行第一次进这一页（见 [tabVisited]）。
+        val firstVisit=tabVisited.add(next)
+        // 首次进入分类页：回到默认的「漫剧 · 全部」。
+        // [categoryPath] 本来就从默认值起步（见字段声明），这里显式写一次是为了挡住
+        // 「本次运行里先在分类页挑过别的、之后又切走再切回来」——那属于**再次**进入，
+        // 由 [tabVisited] 区分，不会走到这一支。
+        if(firstVisit && next==TAB_CATEGORY) categoryPath=CategoryCatalog.defaultTag.path
         if(next!=TAB_RANK && tab==TAB_RANK) boardButtons.values.firstOrNull { it.hasFocus() }?.clearFocus()
         if(next!=TAB_CATEGORY && tab==TAB_CATEGORY) {
             (categoryGroupButtons.values + categoryTagButtons.values).firstOrNull { it.hasFocus() }?.clearFocus()
         }
-        tabState[tab]=CatalogState(page,catalog,hasMore,ranking); tabFocus[tab]=catalogFocus
+        // 换榜单 / 换分类的请求还在路上时，屏上那份列表属于**上一条**选择：
+        // 照存会让用户切回来时看到别的分类 / 榜单的剧集。这时只存一个空页占位，
+        // 切回来自然会重新取一次（见 [chipFocusKey]）。
+        tabState[tab]=CatalogState(page,if(chipFocusKey!=null) emptyList() else catalog,hasMore,ranking); tabFocus[tab]=catalogFocus
         tab=next; val saved=tabState[next]; page=saved?.page ?: 1; catalog=saved?.items ?: emptyList(); hasMore=saved?.hasMore ?: false; ranking=saved?.ranking; catalogFocus=tabFocus[next].orEmpty()
         // 首页的四个剧架就在内存里（[homeFeed]），切回来不需要重新打四次网络；
         // 想要最新的一份按顶部圆形「刷新」。搜索页与榜单页仍然是「没内容才去取」。
@@ -736,9 +911,15 @@ class MainActivity: Activity() {
             TAB_SEARCH -> query.isNotBlank() && catalog.isEmpty()
             else -> false
         }
-        // 切到「内容页」时（首页四栏、榜单、分类、搜索），焦点落到内容第一张卡，
-        // 不停在顶部那一排圆形入口上——用户是来看内容的。
-        if(needsLoad) focusFirstCardOnLanding=true
+        // 落点分两种：
+        // - **首次**进分类 / 榜单页：焦点落在页头那枚芯片上——分类页是二级分类的「全部」
+        //   （默认选中「漫剧 · 全部」），榜单页是当前榜单「漫剧」。这两页都是「先挑一个再看」，
+        //   焦点直接跳到内容第一张卡会让人不知道自己看的是哪一类。
+        // - 其余情况（含首页、搜索页、再次进这两页）：落到内容第一张卡，用户是来看内容的。
+        if(firstVisit && (next==TAB_RANK || next==TAB_CATEGORY)) {
+            chipFocusKey=if(next==TAB_RANK) "board:"+rankBoard.storedValue else "tag:"+categoryPath
+            focusFirstCardOnLanding=false
+        } else if(needsLoad) focusFirstCardOnLanding=true
         showCatalog(load=needsLoad)
     }
     /**
@@ -750,17 +931,28 @@ class MainActivity: Activity() {
      */
     private fun switchRankBoard(board: RankBoard,fromHome: Boolean=false) {
         if(rankBoard==board && !fromHome && tab==TAB_RANK) return
+        // 从首页剧架「查看全部」进来也算进过榜单页：之后点「榜单」图标不该再按「首次进入」处理。
+        tabVisited.add(TAB_RANK)
+        // 这一下是「点了榜单页里的芯片」还是「从首页剧架进来的」，落点完全不同：
+        // 前者焦点留在那枚芯片上（用户还在挑榜单），后者落到内容第一张卡（用户是来看榜单的）。
+        val fromChip=!fromHome && tab==TAB_RANK && boardButtons.values.any { it.hasFocus() }
         boardButtons.values.firstOrNull { it.hasFocus() }?.clearFocus()
         rankBoard=board
         boardButtons.forEach { (option,chip) -> (chip as? ToggleChip)?.setActive(option==board) }
         // 榜单页的内容与页码都跟着榜单走：换榜就是换一份列表。
         tabState.remove(TAB_RANK); tabFocus.remove(TAB_RANK)
         releaseCatalogViews()
-        page=1; catalog=emptyList(); hasMore=false; ranking=null; catalogFocus=""
+        // 只重置页码与「记住的焦点卡」：列表本身留给 [showCatalog] 决定清不清——
+        // 点了芯片时它要留着旧的一屏顶住这一段时间（否则页面上只剩一行「正在加载…」，看起来就是闪屏）。
+        page=1; catalogFocus=""
+        // 从首页剧架进来：顺手把顶部标签切到排行榜，用户看到的就是榜单页本身
+        // （页面名、来源行、底部加载都是同一套）。少了这一步，[showCatalog] 会按当前标签
+        // 重新渲染首页，表现出来就是「在剧架最右边按右键 / 点『查看全部』进不去榜单」。
         if(fromHome) tab=TAB_RANK
-        // 换榜单就是换一份列表：落地后焦点落到第一张卡（不管是从首页剧架进来的，
-        // 还是在榜单页里点了另一枚榜单芯片）。用户按了「看这个榜」，落点就该是榜单内容本身。
-        focusFirstCardOnLanding=true
+        // 换榜单就是换一份列表。落点分两种：在榜单页点了另一枚芯片 → 焦点留在那枚芯片上；
+        // 从首页剧架进来（用户是来看榜单的）→ 内容落地后落到第一张卡。
+        chipFocusKey=if(fromChip) "board:"+board.storedValue else null
+        focusFirstCardOnLanding=!fromChip
         showCatalog(load=true)
     }
     /**
@@ -787,14 +979,25 @@ class MainActivity: Activity() {
      * 芯片的选中态由重建页面时按 [categoryPath] 重新算。
      */
     private fun selectCategory(path: String) {
+        // 在分类页里挑过分类就算进过这一页（首次进入的落点规则因此只生效一次）。
+        tabVisited.add(TAB_CATEGORY)
+        // 点的是大类还是小类芯片，决定焦点落回哪一行：两者都记进 [chipFocusKey]。
+        // 必须在 [releaseCatalogViews] 之前读——它会把两张芯片表清空。
+        val groupChip=categoryGroupButtons.entries.firstOrNull { it.value.hasFocus() }?.key
+        val tagChip=categoryTagButtons.entries.firstOrNull { it.value.hasFocus() }?.key
         categoryPath=path
-        library.categoryPath=path
         tabState.remove(TAB_CATEGORY); tabFocus.remove(TAB_CATEGORY)
         releaseCatalogViews()
-        page=1; catalog=emptyList(); hasMore=false; ranking=null; catalogFocus=""
-        if(tab!=TAB_CATEGORY) tab=TAB_CATEGORY
-        // 换分类就是换一份列表：与换榜单同一条规则，落地后焦点落到第一张卡。
-        focusFirstCardOnLanding=true
+        // 同换榜单：只重置页码与记住的焦点卡，旧列表留到新的一页落地再换（见 [showCatalog]）。
+        page=1; catalogFocus=""
+        // 换分类就是换一份列表。焦点留在**刚点的那一枚**芯片上：点大类就回大类那一枚，
+        // 点小类就回小类那一枚（不再先跑到一级分类、也不再跟着内容落地跳到第一张卡）。
+        chipFocusKey=when {
+            groupChip!=null -> "group:"+groupChip.path
+            tagChip!=null -> "tag:"+tagChip
+            else -> null
+        }
+        focusFirstCardOnLanding=chipFocusKey==null
         showCatalog(load=true)
     }
     /** 本机记录集合页（收藏 / 历史 / 稍后观看）；远端列表只有榜单页一种，不再有「热门集合页」。 */
@@ -815,6 +1018,8 @@ class MainActivity: Activity() {
         collection!=null -> collectionName(collection.orEmpty())
         tab==TAB_RANK -> "热播榜"
         tab==TAB_CATEGORY -> "分类"
+        // 搜索页的导航栏里还挤着输入框与三个按钮，标题只留两个字给它们让宽度。
+        tab==TAB_SEARCH -> "搜索"
         tab==TAB_SETTINGS -> "设置"
         else -> "红果TV"
     }
@@ -827,9 +1032,14 @@ class MainActivity: Activity() {
      */
     private fun navEntry(index: Int = tab): View? = nav.getOrNull(index-1)
 
-    /** 顶部这一排图标入口里当前真正显示的那些。 */
-
-    private fun navIcons(): List<View> = nav.filter { it.isShown }
+    /**
+     * 顶部这一排图标入口。
+     *
+     * 这里按 `visibility` 过滤而**不是** `isShown`：页面是在挂上窗口之前建好的，
+     * 那时 `isShown` 一律是 false，用它过滤会得到一张空表——
+     * 于是「圆形入口按下键进内容」这条焦点链根本没接上（表现出来就是「按上回不到按钮 / 按下不动」）。
+     */
+    private fun navIcons(): List<View> = nav.filter { it.visibility==View.VISIBLE }
     /**
      * 页头里「把焦点交回页头」时该落到哪一枚控件。
      *
@@ -838,19 +1048,119 @@ class MainActivity: Activity() {
      */
     private fun firstHeadControl(): View? = when(tab) {
         TAB_RANK -> boardButtons[rankBoard]
-        TAB_CATEGORY -> categoryGroupButtons.values.firstOrNull { it.isShown }
+        // 分类页：当前这一组的一级分类芯片（不是「第一枚」），与页头里选中的那一枚一致。
+        TAB_CATEGORY -> CategoryCatalog.groupOf(categoryPath)?.let { categoryGroupButtons[it] }
+            ?: categoryGroupButtons.values.firstOrNull()
         // 搜索页的内容入口就是输入框：焦点落在它上面，而不是顶部那排圆形入口。
         TAB_SEARCH -> searchInput
         TAB_HOME -> null
         else -> navEntry()
     }
+    /**
+     * 把 [chipFocusKey] 的 key 查回页面上**当前那一枚**芯片。
+     *
+     * 查不到（芯片还没建好、或换了页面）就返回 null，调用方退回原来的落点规则。
+     */
+    private fun chipControl(key: String?): View? {
+        val parts=key?.split(':',limit=2)?.takeIf { it.size==2 } ?: return null
+        return when(parts[0]) {
+            "board" -> RankBoard.entries.firstOrNull { it.storedValue==parts[1] }?.let { boardButtons[it] }
+            "group" -> CategoryCatalog.groups.firstOrNull { it.path==parts[1] }?.let { categoryGroupButtons[it] }
+            "tag" -> categoryTagButtons[parts[1]]
+            else -> null
+        }
+    }
+    /**
+     * 栅格第一行按上键时该落到哪一枚控件：页头里「与内容直接相邻」的那一个。
+     *
+     * 搜索页是输入框、分类页是当前二级分类芯片、榜单页是当前榜单芯片、
+     * 本机记录页是它自己的动作按钮，其余页面退到顶部圆形入口。
+     * 没有可落的目标时返回 null，调用方把按键交回框架。
+     */
+    private fun headFocusTarget(): View? = when(tab) {
+        // 搜索页：内容第一行按上键先进输入框下面那一行（提示词 / 热搜词），
+        // 那一行收起来时才直接回输入框——方向上是连续的。
+        TAB_SEARCH -> suggestButtons.firstOrNull() ?: searchInput
+        TAB_CATEGORY -> categoryTagButtons[categoryPath]
+            ?: CategoryCatalog.groupOf(categoryPath)?.let { categoryGroupButtons[it] }
+            ?: categoryGroupButtons.values.firstOrNull()
+        TAB_RANK -> boardButtons[rankBoard] ?: boardButtons.values.firstOrNull()
+        TAB_HOME -> navEntry() ?: nav.firstOrNull()
+        else -> favoriteCheck ?: historyManage ?: navEntry()
+    }
+    /**
+     * 把焦点交给页头里的一个控件。
+     *
+     * 页头随列表滚动收起时，那一行的高度是 0、alpha 也是 0：焦点请求本身会成功，
+     * 但用户什么都看不见（读到的就是「按上没反应」）。因此凡是往页头里落焦点，
+     * 一律先把它展开。
+     */
+    private fun focusHead(view: View) {
+        if(topAreaHidden) setTopAreaHidden(false)
+        view.requestFocus()
+    }
+    /**
+     * 换榜单 / 换分类之后，把焦点交回**用户刚点的那一枚**芯片。
+     *
+     * 页面重建会把旧的芯片整行摘掉，不显式指定的话系统会把焦点交给新布局里第一个可聚焦控件
+     * （分类页就是第一枚大类芯片）——表现出来就是「选完二级分类，焦点先跑到一级分类，
+     * 再跟着内容落地跳到别处」。芯片建好之后立刻调一次，焦点从头到尾都停在那一枚上。
+     * [prefix] 限定这一页该认哪一类芯片（榜单页 `board:`、分类页 `group:` / `tag:`）。
+     */
+    private fun restoreChipFocus(prefix: String) {
+        val key=chipFocusKey ?: return
+        if(!key.startsWith(prefix)) return
+        val chip=chipControl(key) ?: return
+        focusHead(chip)
+        // 芯片刚建出来时还没走完布局，这一下请求可能不生效（焦点会落到新布局里第一个
+        // 可聚焦控件上，也就是第一枚大类芯片）。等它挂上窗口再补一次。
+        // 补的条件收紧到「焦点空着，或落在另一枚芯片上」：用户在这一帧里已经移走焦点时不抢回来。
+        chip.post {
+            val current=root.findFocus()
+            if(chip.isAttachedToWindow && !chip.hasFocus() && (current==null || current is ToggleChip)) focusHead(chip)
+        }
+    }
     /** 榜单来源说明：四个榜单都来自官网自己的热播榜，带名次与热度，不再有「按播放量排序」的替代品。 */
     private fun rankSource()=rankBoard.source
     /**
-     * 四个榜单的切换芯片是否放进页头里（榜单名那一行的右侧）。
-     * 屏幕窄或字号放大时退回榜单名下方单独一行。
+     * 页头那一行的切换芯片（榜单页的四个榜单、分类页的三个一级分类）是否放进导航栏里。
+     * 屏幕窄或字号放大时退回导航栏下方单独一行——芯片本身按文字宽度排布，
+     * 挤在导航栏里会把右边的圆形入口顶出屏幕。
      */
-    private fun inlineBoardFilters()=tab==TAB_RANK && resources.configuration.fontScale<=1.2f && widthDp()>=900
+    private fun inlineHeadChips()=resources.configuration.fontScale<=1.2f && widthDp()>=900
+    /**
+     * 一行芯片的四向焦点。
+     *
+     * - 左右在行内按顺序走；[after] 非空时「最后一枚往右」接它（[after] 往左回最后一枚），
+     *   为空时走到两端**停在原地**（不跳出行外）；
+     * - 向上交给 [up]：页头最上面那一行传自己（按上键停在原地），
+     *   分类页的二级分类传它所属的一级分类芯片；
+     * - 向下由 `wireGridFocus` 接上内容区的第一张卡。
+     *
+     * 左右键在这里**显式接管**：只写 `nextFocusRightId` 时，遥控器右移会被
+     * 行外的控件（导航栏那一排圆形入口）抢走，表现出来就是「右键切不动焦点」。
+     */
+    private fun wireChipRow(chips: List<View>, up: (Int)->View?, after: View?=null) {
+        chips.forEachIndexed { index, chip ->
+            val left=chips[(index-1).coerceAtLeast(0)]
+            val right=if(index==chips.lastIndex) (after ?: chip) else chips[index+1]
+            val above=up(index) ?: chip
+            chip.nextFocusLeftId=left.id
+            chip.nextFocusRightId=right.id
+            chip.nextFocusUpId=above.id
+            chip.setOnKeyListener { view,key,event ->
+                if(event.action!=KeyEvent.ACTION_DOWN) false
+                else when(key) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { if(left!==view) { focusHead(left); true } else true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { if(right!==view) { focusHead(right); true } else true }
+                    KeyEvent.KEYCODE_DPAD_UP -> { if(above!==view) { focusHead(above); true } else true }
+                    else -> false
+                }
+            }
+        }
+        // 同一视觉行里紧跟在这些芯片后面的那一枚（导航栏的圆形入口）往左回最后一枚芯片。
+        if(after!=null) after.nextFocusLeftId=chips.last().id
+    }
     /**
      * 远端长列表：排行榜页的四个榜单，以及搜索结果。
      * 这些列表都是「往下接」而不是「翻页」：已显示的剧集不动，新的一页接在末尾。
@@ -872,7 +1182,7 @@ class MainActivity: Activity() {
     private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false) {
         // 不取远端内容的这一次重建没有「内容落地」这一步，意图要清掉：
         // 否则它会留到下一次无关的落地，把焦点莫名其妙地推到第一张卡上。
-        if(!load) focusFirstCardOnLanding=false
+        if(!load) { focusFirstCardOnLanding=false; chipFocusKey=null }
         initialCatalogPending=false; restoreStoppedPage=false; pendingDetail=null
         // 榜单页与搜索结果从第 2 页起是「向下追加」：保留已经显示的剧集，只把新的一页接在后面。
         val appending=load && appendCatalog() && page>1 && catalog.isNotEmpty()
@@ -886,9 +1196,19 @@ class MainActivity: Activity() {
                 homeFeed=LinkedHashMap(cached)
                 homeFromCache=cached.isNotEmpty()
                 catalog=emptyList(); hasMore=false; ranking=null
-            } else if(!appending) { catalog=emptyList(); hasMore=false; ranking=null }
+            } else if(!appending && chipFocusKey==null) { catalog=emptyList(); hasMore=false; ranking=null }
         }
         invalidatePage(); screen="catalog"; releaseCatalogViews(); val container=base()
+        // 换榜单 / 换分类的请求还在路上时切走了标签（或在搜索页重新搜）：那一次的落地会被
+        // [invalidatePage] 作废，落点意图因此永远等不到消费，必须在这里清掉——
+        // 留着它会让新页面一直「芯片握着焦点」（不预取下一页、不恢复位置）。
+        // 判定按「这一页认不认这枚芯片」来：分类页的意图不能跟到榜单页上，反之亦然。
+        val ownsChip=when(tab) {
+            TAB_RANK -> chipFocusKey?.startsWith("board:")==true
+            TAB_CATEGORY -> chipFocusKey?.startsWith("group:")==true || chipFocusKey?.startsWith("tag:")==true
+            else -> false
+        }
+        if(!ownsChip) chipFocusKey=null
         if(foreground && library.isLoaded && !favoriteMonitor.running) main.post { if(foreground && screen=="catalog") favoriteMonitor.check() }
         // 顶部导航栏：左侧是页面名（首页是品牌「红果TV」，二级界面与榜单页显示自己的名字），
         // 右侧是这一页自己的动作与 4 个圆形图标入口（刷新 / 搜索 / 排行榜 / 设置）。
@@ -913,7 +1233,10 @@ class MainActivity: Activity() {
                 tvTools.confirm("清空历史记录","将删除本机所有观看进度，收藏会保留。",historyManage) { library.clearHistory(); catalogFocus=""; showCatalog() }
             }
         }
-        top.addView(Space(this),lp(0,1).apply { weight=1f })
+        // 搜索页：搜索框与「搜索 / 历史 / 手机输入」就在导航栏里（用户不用先按一下才够得着），
+        // 输入框吃掉中间那段弹性空间；其余页面这里是一条弹性空白。
+        if(tab==TAB_SEARCH) searchBar(top,query.isBlank() && !load && !focusNav)
+        else top.addView(Space(this),lp(0,1).apply { weight=1f })
         // 顶部只有四个圆形入口，顺序固定：搜索 → 分类 → 榜单 → 设置。
         // 「刷新」按钮整个去掉了：首页、榜单、分类、搜索都是「进页面 / 滚到顶 / 换榜单 / 换分类」时自己重取，
         // 留着它只是多一个入口（职责已经被这些动作覆盖）。
@@ -930,6 +1253,8 @@ class MainActivity: Activity() {
         }
         container.addView(top,lp(-1,dp(TvStyle.TOOLBAR_HEIGHT)))
         registerTopAreaRow(top)
+        // 圆形入口建好了：把搜索页导航栏里那几件的「按上」接回它们（见 [wireHeadNavUp]）。
+        if(tab==TAB_SEARCH) wireHeadNavUp()
         // 页面内提示行：应用里不弹系统 Toast，需要「刚刚发生了什么」这类反馈时显示这一行淡字。
         // 它不参与焦点、不盖画面，几秒后自己消失；页面重建时按 [catalogHint] 复原。
         val hintView=text("",14f,TvStyle.textDim).apply {
@@ -951,133 +1276,122 @@ class MainActivity: Activity() {
             val boards=row().apply { setPadding(pageBleed(),0,pageBleed(),dp(4)) }
             val boardChips=mutableListOf<View>()
             RankBoard.entries.forEach { board ->
-                // 四个按钮分别是 漫剧 / 短剧 / 真人 / AI；页面主标题固定写「热播榜」（见 [pageTitle]）。
+                // 四个按钮分别是 漫剧 / 短剧 / 真人 / AI剧；页面主标题固定写「热播榜」（见 [pageTitle]）。
                 val chip=ToggleChip(this,board.label,rankBoard==board) { switchRankBoard(board) }
-                navEntry()?.let { chip.nextFocusUpId=it.id }
                 boardButtons[board]=chip
                 boardChips+=chip
                 gapInto(boards,chip,lp(-2,-2))
             }
-            // 行内左右邻居显式串起来（理由同分类页的小类芯片）：走到两端停在原地。
-            boardChips.forEachIndexed { index,chip ->
-                chip.nextFocusLeftId=boardChips[(index-1).coerceAtLeast(0)].id
-                chip.nextFocusRightId=boardChips[(index+1).coerceAtMost(boardChips.lastIndex)].id
-            }
-            if(inlineBoardFilters()) {
+            // 这一行就在页头最上面：按上键停在原地（以前会跳到导航栏的「榜单」图标上，
+            // 用户读到的就是「已经在最上面了还换焦点」）。右移在四枚之间切换，
+            // 走到最后一枚接同一视觉行里紧跟着的那排圆形入口。
+            // 芯片就在导航栏里时，往右走到最后一枚接着是那排圆形入口（同一视觉行，方向连续）；
+            // 退回下面单独一行时不接（那时它在自己的一行里，右到头就是到头）。
+            val afterBoards=if(inlineHeadChips()) nav.firstOrNull() else null
+            wireChipRow(boardChips,{ boardChips[it] },afterBoards)
+            if(inlineHeadChips()) {
                 boards.setPadding(0,0,0,0); filterSlot.addView(boards)
             } else {
                 container.addView(boards)
             }
             navIcons().forEach { it.nextFocusDownId=boardButtons.getValue(rankBoard).id }
+            // 没有内容可落时（空榜单 / 加载中）这一下也不会变成「按下没反应」：
+            // 先让它指向自己，内容铺好之后由 `wireGridFocus` 改成第一张卡。
+            boardButtons.values.forEach { it.nextFocusDownId=it.id }
+            // 点了另一枚榜单芯片：焦点立刻交回那一枚，不等内容落地、也不经过别的控件。
+            restoreChipFocus("board:")
         }
         if(tab==TAB_SEARCH) {
-            val searchRow=row().apply { setPadding(pageBleed(),dp(2),pageBleed(),dp(2)) }
-            // 搜索框与同一行的按钮共用一套尺寸令牌：48dp 底板、胶囊圆角、左右 28dp 内边距，
-            // 因此输入框和「搜索 / 历史 / 手机输入」在一条基线上；差别只在「凹槽 vs 凸起」这一层语义。
-            val searchBand=dp(TvStyle.SOFT_BAND)
-            val input=EditText(this).apply {
-                id=View.generateViewId(); hint="输入剧名或关键词"; setText(query)
-                textSize=20f; setTypeface(typeface,Typeface.BOLD)
-                setTextColor(TvStyle.text); setHintTextColor(TvStyle.muted); isSingleLine=true; maxLines=1
-                filters=arrayOf(android.text.InputFilter.LengthFilter(80))
-                imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
-                includeFontPadding=false
-                // 输入框是一条「压进底板」的凹槽：内边距里含柔光带，内阴影才有地方画。
-                setPadding(dp(TvStyle.BUTTON_PAD_NORMAL)+searchBand,searchBand,dp(TvStyle.BUTTON_PAD_NORMAL)+searchBand,searchBand)
-                background=softPanel(TvStyle.well,TvStyle.RADIUS_PILL,style=SoftStyle.INSET,ring=TvStyle.outline,ringWidth=1)
-                setOnFocusChangeListener { view,_ ->
-                    val focused=view.hasFocus()
-                    // 凹陷控件的焦点没法靠「打亮」表达，只能把槽压得更深、让这条中性细线加深。
-                    // 线色取 45% 文字基色（浅色主题是深墨、深色主题是暖白），不是强调色——
-                    // 选框不再有任何颜色。
-                    view.background=softPanel(
-                        TvStyle.well,TvStyle.RADIUS_PILL,style=SoftStyle.INSET,
-                        ring=if(focused) TvStyle.focusLine else TvStyle.outline,
-                        ringWidth=1,
-                        depth=if(focused) 1.6f else 1.1f)
-                }
-                // EditText 自己会把上下键吃掉做光标移动，焦点因此困在输入框里出不去。
-                // 这两下在这里显式交回页面：上=分类开关，下=搜索结果的第一张卡（没有结果时退到顶部入口）。
-                setOnKeyListener { view,keyCode,event ->
-                    if(event.action!=KeyEvent.ACTION_DOWN || (keyCode!=KeyEvent.KEYCODE_DPAD_UP && keyCode!=KeyEvent.KEYCODE_DPAD_DOWN)) false
-                    else {
-                        val target=when {
-                            keyCode==KeyEvent.KEYCODE_DPAD_DOWN -> root.findViewById<View>(view.nextFocusDownId)?.takeIf { it.isShown && it.isFocusable }
-                                ?: gridCards().firstOrNull { it.isShown } ?: navEntry()?.takeIf { it.isShown }
-                            else -> root.findViewById<View>(view.nextFocusUpId)?.takeIf { it.isShown && it.isFocusable }
-                                ?: navEntry()?.takeIf { it.isShown }
-                        }
-                        if(target==null) false
-                        else {
-                            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(view.windowToken,0)
-                            view.clearFocus(); target.requestFocus(); true
-                        }
-                    }
-                }
+            // 输入框下面那一行：**没有输入时是热搜词，打字时换成提示词**。
+            // 固定高度、宽度与内容区对齐（见 [CHIP_ROW_HEIGHT]），因此这一行换来换去
+            // 不会让下面的卡片行上下跳；两者都没有时整行隐藏，不留空槽。
+            val hintScroll=HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled=false
+                clipChildren=false; clipToPadding=false
+                isFillViewport=true
+                visibility=View.GONE
             }
-            searchRow.addView(input,lp(0,dp(TvStyle.BUTTON_NORMAL+2*TvStyle.SOFT_BAND)).apply { weight=1f })
-            fun search() { val next=input.text.toString().trim(); if(next.isBlank()) { input.requestFocus(); return }; runSearch(next) }
-            searchInput=input
-            val submit=addButton(searchRow,"搜索") { search() }
-            searchButton=submit
-            input.nextFocusUpId=navEntry()?.id ?: input.id; searchButton?.nextFocusUpId=input.nextFocusUpId
-            lateinit var recent: TvButton
-            recent=addButton(searchRow,"历史") { showSearchHistory(recent) }
-            recent.nextFocusUpId=input.nextFocusUpId
-            lateinit var phone: TvButton
-            phone=addButton(searchRow,"手机输入") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0); tvTools.phoneInput(phone) { runSearch(it) } }
-            phone.nextFocusUpId=input.nextFocusUpId
-            searchActions.addAll(listOf(recent,phone))
-            input.setOnEditorActionListener { _,_,_-> search(); true }
-            container.addView(searchRow); registerTopAreaRow(searchRow)
-            // 进搜索页、还没有关键词时焦点直接落在输入框上：这一页要「等用户输入」，
-            // 焦点停在顶部圆形入口上等于让用户先按一下右键才能打字。
-            // 有关键词（刚搜完切回这一页）时不抢焦点：那时焦点应该在结果或它原来的位置上。
-            if(query.isBlank() && !load && !focusNav) searchInput?.requestFocus()
+            val hintLine=row().apply { gravity=Gravity.CENTER_VERTICAL }
+            hintScroll.addView(hintLine)
+            container.addView(
+                hintScroll,
+                lp(gridContentWidth(),dp(CHIP_ROW_HEIGHT)).apply { leftMargin=pageBleed() }
+            )
+            registerTopAreaRow(hintScroll)
+            suggestRow=hintScroll; suggestLine=hintLine
+            // 进搜索页先把热搜词铺上（还没有输入时这一行就是它）；输入框变化时在下面接管。
+            if(query.isBlank()) loadHotSearches() else scheduleSuggestions(query)
         } else if(tab==TAB_CATEGORY) {
-            // 分类页的两行芯片：第一行三个大类，第二行是该大类下面的小类（第一个固定「全部」）。
-            // 页面主标题写「分类」，当前选中的小类写在下面这一行的右侧（一行淡字）。
+            // 分类页的**一级分类进导航栏**（与榜单页的四个榜单同一套做法），下面只留一行二级分类。
+            // 页面主标题写「分类」，当前选中的小类写在这一行的右侧（一行淡字）。
             val group=CategoryCatalog.groupOf(categoryPath) ?: CategoryCatalog.groups.first()
-            val groupRow=row().apply { setPadding(pageBleed(),0,pageBleed(),dp(2)) }
             val groupChips=mutableListOf<View>()
             CategoryCatalog.groups.forEach { option ->
                 val chip=ToggleChip(this,option.label,option==group) { switchCategoryGroup(option) }
-                navEntry()?.let { chip.nextFocusUpId=it.id }
                 categoryGroupButtons[option]=chip
                 groupChips+=chip
-                gapInto(groupRow,chip,lp(-2,-2))
             }
-            groupChips.forEachIndexed { index,chip ->
-                chip.nextFocusLeftId=groupChips[(index-1).coerceAtLeast(0)].id
-                chip.nextFocusRightId=groupChips[(index+1).coerceAtMost(groupChips.lastIndex)].id
+            // 一级分类与四个榜单一样在页头最上面：按上键停在原地，左右在行内走，
+            // 走到最后一枚接同一视觉行里紧跟着的那排圆形入口。
+            val afterGroups=if(inlineHeadChips()) nav.firstOrNull() else null
+            wireChipRow(groupChips,{ groupChips[it] },afterGroups)
+            // 「漫剧 · 玄幻」这行淡字跟着一级分类走：一级分类在导航栏里时它也放那儿，
+            // 退回单独一行时它跟在芯片后面（不进二级分类那一行的横向滚动区，否则会被滚出去）。
+            val describe=text(CategoryCatalog.describe(categoryPath),12f,muted)
+            if(inlineHeadChips()) {
+                groupChips.forEach { gapInto(filterSlot,it,lp(-2,-2),TvStyle.GAP_INLINE) }
+                gapInto(filterSlot,describe,lp(-2,-2),TvStyle.GAP_BLOCK)
+            } else {
+                val groupRow=row().apply { setPadding(pageBleed(),0,pageBleed(),dp(2)) }
+                groupChips.forEach { gapInto(groupRow,it,lp(-2,-2)) }
+                gapInto(groupRow,describe,lp(-2,-2),TvStyle.GAP_BLOCK)
+                container.addView(groupRow); registerTopAreaRow(groupRow)
             }
-            gapInto(groupRow,text(CategoryCatalog.describe(categoryPath),12f,muted),lp(-2,-2),TvStyle.GAP_BLOCK)
-            container.addView(groupRow); registerTopAreaRow(groupRow)
-            // 小类那一行的间距比大类收一档：芯片本身已经小一档，间距不变会显得松散。
-            val tagRow=row().apply { setPadding(pageBleed(),0,pageBleed(),dp(2)) }
+            // 二级分类那一行：**固定高度**（与下面的卡片行同宽、同一内容线）。
+            // 高度不跟着芯片数量 / 是否换行变，换一级分类时这一块不会忽高忽低，下面的卡片不会上下跳。
+            // 不给行内边距：芯片自己的柔光带就是它与内容线的间距（与海报卡同一档），
+            // 因此第一枚芯片的可见边界与下方第一张海报的左边界落在同一条线上。
+            val tagRow=row().apply {
+                gravity=Gravity.CENTER_VERTICAL
+            }
             val tagChips=mutableListOf<View>()
             group.tags.forEach { tag ->
                 // 小类（二级分类）整体小一档：高度 40dp、字号 15sp、左右内边距 18dp（大类是 48/16/28）。
                 val chip=ToggleChip(this,tag.label,tag.path==categoryPath,ButtonSize.COMPACT) { switchCategoryTag(tag) }
-                chip.nextFocusUpId=categoryGroupButtons.getValue(group).id
                 categoryTagButtons[tag.path]=chip
                 tagChips+=chip
                 gapInto(tagRow,chip,lp(-2,-2))
             }
-            // 小类芯片的左右邻居显式串起来：行内横向滚动容器自己不会按「芯片宽度」算焦点，
-            // 不写死邻接关系时遥控器右移会跳到行外的控件上。走到两端停在原地。
-            tagChips.forEachIndexed { index,chip ->
-                chip.nextFocusLeftId=tagChips[(index-1).coerceAtLeast(0)].id
-                chip.nextFocusRightId=tagChips[(index+1).coerceAtMost(tagChips.lastIndex)].id
-            }
-            // 小类多的目录（真人剧 24 个）一行放不下：整行横向可滚，左右键走到行末继续推。
+            // 二级分类：左右在行内走（走到两端停在原地），向上回到它所属的一级分类芯片。
+            // 它自己单独占一行（上面还有一行一级分类 / 导航栏），因此往右不接任何别的控件。
+            wireChipRow(tagChips,{ categoryGroupButtons[group] ?: tagChips[it] })
+            // 小类多的目录（真人 24 个）一行放不下：整行横向可滚，左右键走到行末继续推。
             val tagScroll=HorizontalScrollView(this).apply {
                 isHorizontalScrollBarEnabled=false
                 clipChildren=false; clipToPadding=false
+                // 固定高度 + 撑满视口：里面的 [tagRow] 拿到整行高度，芯片靠它的 gravity 垂直居中。
+                // 少了这一条，芯片会贴在行的上边缘，换一级分类时看着像整块在往上跳。
+                isFillViewport=true
             }
             tagScroll.addView(tagRow)
-            container.addView(tagScroll); registerTopAreaRow(tagScroll)
+            // 宽度与下面那一排卡片**逐像素对齐**：容器自己让出的是 pageInset()-pageBleed()，
+            // 这里补回 pageBleed()，左右边界就正好落在卡片行的内容线上（[gridContentWidth]）。
+            container.addView(
+                tagScroll,
+                lp(gridContentWidth(),dp(CHIP_ROW_HEIGHT)).apply { leftMargin=pageBleed() }
+            )
+            registerTopAreaRow(tagScroll)
+            // 二级分类那一行固定高度：内容按 [CHIP_ROW_HEIGHT] 垂直居中，因此换一级分类时
+            // 这一块的高度不变，下面的卡片行不会跟着上下跳。
             navIcons().forEach { it.nextFocusDownId=categoryGroupButtons.getValue(group).id }
+            // 一级分类按下键进二级分类那一行；二级分类按下键进内容第一张卡
+            // （内容铺好之后由 `wireGridFocus` 接上真正的第一张卡）。
+            groupChips.forEach { it.nextFocusDownId=categoryTagButtons[categoryPath]?.id ?: it.id }
+            tagChips.forEach { it.nextFocusDownId=it.id }
+            // 点了大类或小类芯片：焦点立刻交回那一枚（换大类时小类那一行整个换掉，
+            // 焦点也必须落在新的小类芯片上，不能留在第一枚大类上）。
+            restoreChipFocus("group:")
+            restoreChipFocus("tag:")
         } else if(tab==TAB_RANK) {
             // 榜单名已经进了导航栏，这一行只剩来源 / 更新时间；
             // 「刷新榜单」按钮去掉：进页面、切榜单、滚到顶都会重新取，不需要单独一个入口。
@@ -1091,15 +1405,26 @@ class MainActivity: Activity() {
             catalog=localItems(); ranking=null; page=page.coerceIn(1,maxOf(1,(catalog.size+pageSize-1)/pageSize)); hasMore=page*pageSize<catalog.size
         }
         if(load) {
+            // 换榜单 / 换分类（点了芯片）时**不把列表清空**：旧的一屏留在原位，等新的一页落地再换。
+            // 清空的话这一整段时间页面上只剩一行「正在加载…」，观感就是「每次选分类都闪一下」。
+            // 位置也照旧：[releaseCatalogViews] 刚把旧列表的滚动位置记在它自己的 key 上
+            // （此刻 [catalogPageKey] 还没换），照搬过来才不会先跳回顶部再被新内容替换。
+            val stale=chipFocusKey!=null && appendCatalog() && catalog.isNotEmpty()
+            // 芯片握着焦点时（[chipFocusKey] 非空）一律不许把焦点交给页头 / 顶部入口：
+            // 用户刚点的那一枚芯片就是落点，这一页剩下的重建都不该动它。
+            val holdChip=chipFocusKey!=null
             if(appending) catalogGrid(body,focusNav,focusType,loadingMore=true)
             else if(home) catalogGrid(body,focusNav,focusType,loading=true)
+            else if(stale) catalogGrid(body,if(holdChip) false else focusNav,focusType,keepScroll=scrollPositions[catalogPageKey])
             else {
                 message(body,"正在加载…")
                 // 加载期间焦点必须有一个**确定的落点**：整页重建之后，刚按下的那枚芯片已经离树，
-                // 不管的话系统会把焦点交给新布局里第一个可聚焦控件（页头那排入口 / 芯片），
-                // 落地时看起来就是「焦点停在榜单按钮上」。这里显式落在页头控件上，
-                // 内容一到就由 [focusFirstCardOnLanding] 把焦点交给第一张卡。
-                if(focusType || focusFirstCardOnLanding) firstHeadControl()?.requestFocus()
+                // 不管的话系统会把焦点交给新布局里第一个可聚焦控件（页头那排入口 / 芯片）。
+                // 点了芯片就把焦点交回那枚芯片（从头到尾不动）；否则落在页头控件上，
+                // 内容一到再由 [focusFirstCardOnLanding] 把焦点交给第一张卡。
+                val chip=chipControl(chipFocusKey)
+                if(chip!=null) chip.requestFocus()
+                else if(focusType || focusFirstCardOnLanding) firstHeadControl()?.requestFocus()
             }
             val requestTab=tab; val requestPage=page; val requestQuery=query; val requestBoard=rankBoard
             val requestCategory=categoryPath
@@ -1150,8 +1475,18 @@ class MainActivity: Activity() {
                     // catalogGrid 末尾的兜底会把焦点交给第一张卡（`catalogFocus` 在换列表时已清空）。
                     // 其余情况保留用户当前在页头的位置（切标签回来看同一页等）。
                     val landFirst=focusFirstCardOnLanding; focusFirstCardOnLanding=false
-                    val keepNav=!landFirst && nav.any { it.hasFocus() }
-                    body.removeAllViews(); catalogGrid(body,keepNav || focusNav)
+                    // 点了芯片的这一次（[chipFocusKey] 非空）同样不要把焦点交给第一张卡：
+                    // 用户还在挑榜单 / 挑分类，落点就是他刚点的那一枚芯片。
+                    val holdChip=chipFocusKey!=null
+                    val keepNav=!holdChip && !landFirst && nav.any { it.hasFocus() }
+                    // [keepFocus]：新的一页铺好之后**一个焦点都不许动**——用户刚点的那一枚芯片
+                    // 就是落点，内容落地不该把焦点带去第一张卡（那正是「焦点跳到别处」的来源）。
+                    body.removeAllViews(); catalogGrid(body,if(holdChip) false else keepNav || focusNav,keepFocus=holdChip)
+                    // 新的一页已经铺好、焦点也已交回芯片，这一轮的意图到此结束。
+                    chipFocusKey=null
+                    // 上面那次重建刻意跳过了预取（那时屏上还是旧列表），这里补一次：
+                    // 用户第一次按下键时下一页的内容已经在手上。
+                    if(holdChip) prefetchNextPage()
                 }
             }, { problem ->
                 if(requestTab==TAB_HOME) {
@@ -1175,15 +1510,29 @@ class MainActivity: Activity() {
                     showCatalog(true)
                 } else {
                     body.removeAllViews()
-                    error(body,problem) { showCatalog(true) }
+                    val retry=error(body,problem) { showCatalog(true) }
+                    // 取不到内容时焦点仍然留在用户刚点的那一枚芯片上（不跳到「重试」上），
+                    // 但「重试」要够得着：芯片按下键就是它，它按上键回芯片。
+                    chipControl(chipFocusKey)?.let { chip ->
+                        chip.nextFocusDownId=retry.id
+                        retry.nextFocusUpId=chip.id
+                        chip.requestFocus()
+                    }
+                    chipFocusKey=null
                 }
             })
         } else catalogGrid(body,focusNav,focusType)
     }
-    private fun catalogGrid(body: LinearLayout,focusNav: Boolean,focusType: Boolean=false,loading: Boolean=false,loadingMore: Boolean=false) {
+    private fun catalogGrid(body: LinearLayout,focusNav: Boolean,focusType: Boolean=false,loading: Boolean=false,loadingMore: Boolean=false,keepScroll: Int?=null,keepFocus: Boolean=false) {
+        // 「这一次重建是点了榜单 / 分类芯片引起的」要在这里就定下来：下面的焦点落点是
+        // `post` 里跑的，等它执行时 [chipFocusKey] 可能已经被落地逻辑消费掉了，
+        // 那时再读就守不住「不许抢焦点」这条规则。
+        val chipHeld=chipFocusKey!=null || keepFocus
         // 这一页会新建自己的栅格：旧的活引用先作废（首页剧架不是栅格，这里同样清干净），往下重建。
         gridList=null; gridScroll=null; gridPaging=null; moreCount=null; pagingHasMore=false
-        gridRows.clear(); gridCardWidth=0; gridGap=0; gridPosterHeight=0
+        gridWindow=null; gridTopSpacer=null; gridBottomSpacer=null
+        gridItems=emptyList(); gridRowStride=0; gridWindowStart=-1
+        gridRows.clear(); gridRowPool.clear(); gridCardWidth=0; gridGap=0; gridPosterHeight=0
         gridRestoring=true
         if(tab==TAB_HOME && page==1 && collection==null) { renderHome(body,focusNav,focusType,loading); return }
         // 这一页会新建自己的页头行与底部按钮，先把上一页留下的引用清掉：
@@ -1197,7 +1546,6 @@ class MainActivity: Activity() {
             topAreaHeights.remove(row); topAreaRestore.remove(row)
         }
         topArea.removeAll { it.parent==null }
-        catalogCards.clear(); cardImages.clear()
         // 集合页的标题与「检查更新 / 管理记录」都搬进了顶部导航栏，这里只剩收藏页的更新状态行。
         if(collection=="favorites") {
             val status=text(favoriteMonitor.status,13f,muted).apply { setPadding(pageBleed(),0,pageBleed(),dp(4)) }
@@ -1221,7 +1569,13 @@ class MainActivity: Activity() {
         // 静默期内不改页头状态，否则每次「展示更多」重建页面都会把这些滚动当成「滚到顶了」，
         // 页头于是又展开一次。
         topAreaSettleUntil=android.os.SystemClock.elapsedRealtime()+TvStyle.DURATION+120
-        scroll.setOnScrollChangeListener { _,_,y,_,_ -> if(catalogScroll===scroll && !gridRestoring) onListScroll(y) }
+        scroll.setOnScrollChangeListener { _,_,y,_,_ ->
+            if(catalogScroll!==scroll || gridRestoring) return@setOnScrollChangeListener
+            // 先按新的滚动位置把窗口挪好，再交给页头收展 / 预取那套逻辑。
+            // 窗口外的那几百行根本不存在，因此这一步与「已加载多少」无关。
+            syncGridWindow()
+            onListScroll(y)
+        }
         // 远端长列表不切页：catalog 就是已经向下追加出来的整份列表，一次全画出来。
         // 首页与热门隐藏掉本机标为「不感兴趣」的剧；搜索结果不做这层过滤（搜到就是要看）。
         val displayed=when {
@@ -1232,7 +1586,8 @@ class MainActivity: Activity() {
         }
         if(displayed.isEmpty()) {
             message(list,if(loading) "正在加载推荐…" else when {
-                tab==TAB_SEARCH -> if(query.isBlank()) "输入关键词，用遥控器确认搜索" else "没有找到相关剧集，换个关键词试试"
+                // 搜索页的「怎么打字」在这里也说一次：这是没有结果时用户唯一能看到的说明。
+                tab==TAB_SEARCH -> if(query.isBlank()) "输入关键词后按「搜索」；遥控器用方向键选字，也可外接键盘" else "没有找到相关剧集，换个关键词试试"
                 tab==TAB_CATEGORY -> "${CategoryCatalog.describe(categoryPath)}暂时没有内容"
                 collection=="favorites" -> "在剧集详情中选择收藏，喜欢的剧就会出现在这里"
                 collection=="history" -> "播放过的剧集会自动保存在这里"
@@ -1248,17 +1603,28 @@ class MainActivity: Activity() {
             if(autoAppendCatalog() && hasMore) message(list,"向下滚动会自动加载更多")
             // 空页没有卡片可落，只能退回页头控件——绝不能不管：焦点留在刚被摘掉的控件上，
             // 系统会把它交给新布局里第一个可聚焦控件，位置不确定。
+            // 点了芯片的这一次仍以那枚芯片为准（空分类也一样），不要退到第一枚大类上。
             focusFirstCardOnLanding=false
-            (firstHeadControl() ?: navEntry())?.requestFocus()
+            (chipControl(chipFocusKey) ?: firstHeadControl() ?: navEntry())?.requestFocus()
             return
         }
         val gap=dp(6)
-        val gridWidth=(resources.displayMetrics.widthPixels-2*pageInset()-2*dp(2)).coerceAtLeast(dp(320))
+        val gridWidth=gridContentWidth()
         val width=((gridWidth-gap*(GRID_COLUMNS-1))/GRID_COLUMNS).toInt()
         // 与 HomeScreen.slotHeight 同一算法：先扣掉卡片 5dp 内边距，再按 134:196 换算。
         val posterHeight=((width-dp(2*TvStyle.SOFT_BAND+8))/TvStyle.POSTER_ASPECT).toInt()
         gridList=list; gridScroll=scroll; gridCardWidth=width; gridGap=gap; gridPosterHeight=posterHeight
-        addGridRows(list,displayed,width,gap,posterHeight)
+        gridItems=displayed
+        gridRowStride=0
+        gridWindowStart=-1
+        // 列表高度由两个 spacer 撑出来：中间只放视口附近那几行（见 [syncGridWindow]）。
+        // spacer 必须是真正的 Space：它只占高度、不参与绘制、也不进焦点链。
+        val topSpacer=Space(this); val window=column(); val bottomSpacer=Space(this)
+        gridTopSpacer=topSpacer; gridWindow=window; gridBottomSpacer=bottomSpacer
+        list.addView(topSpacer,lp(-1,0))
+        list.addView(window,lp(-1,-2))
+        list.addView(bottomSpacer,lp(-1,0))
+        syncGridWindow(force=true)
         val paging=row(); paging.gravity=Gravity.CENTER
         var prev: View?=null; var next: View?=null
         if(appendCatalog()) {
@@ -1275,41 +1641,58 @@ class MainActivity: Activity() {
         }
         wireGridFocus(prev,next)
         // 追加一页之后把焦点交给新出现的第一张卡片；没有新卡片或加载失败就留在底部按钮上。
-        val appended=when {
+        // 窗口化之后新卡片往往还没物化，因此这里记的是**索引**，落地时由 [focusGridIndex] 补窗口。
+        val appendedIndex=when {
             wanted==null -> null
-            wanted==LOAD_MORE -> moreButton
-            else -> gridCards().firstOrNull { it.tag==wanted }
+            wanted==LOAD_MORE -> null
+            else -> gridItems.indexOfFirst { it.id==wanted }.takeIf { it>=0 }
         }
-        if(focusType) firstHeadControl()?.requestFocus() else if(focusNav) navEntry()?.requestFocus()
-        else if(loadingMore) moreButton?.requestFocus()
-        else if(appended!=null) appended.requestFocus()
-        // 记住过焦点的卡片（同一页重建）优先；其次落到第一张卡——
-        // 「换榜单 / 换分类 / 从首页进榜单」这类换列表的动作走的就是这一条。
-        else (gridCards().firstOrNull { it.tag==catalogFocus } ?: gridCards().firstOrNull())?.requestFocus()
-        val savedScroll=scrollPositions[catalogPageKey]
+        // 三种情况：换榜单 / 换分类时屏上还是**旧列表**（[keepScroll] 把它原来的位置带过来，
+        // 免得点完芯片先跳一下）；换列表的新内容落地时从头开始（不沿用上一条的位置）；
+        // 其余重建按这个 key 记住的位置恢复。
+        val savedScroll=keepScroll ?: if(chipHeld) null else scrollPositions[catalogPageKey]
+        // 位置恢复要等视口高度量到再算：视口还没测量时窗口只能按估算铺，
+        // 恢复位置也会被 ScrollView 夹成 0（clamp 里 my >= child 直接返回 0），
+        // 换页之后列表就跳回顶部、页头跟着展开。
         scroll.post {
             if(catalogScroll!==scroll) return@post
             val fitted=minOf(posterHeight,(scroll.height-dp(56)).coerceAtLeast(dp(120)))
-            gridCards().forEach { view -> (view as PosterCard).resizePoster(fitted) }
-            // 位置恢复要等新列表量完再算：内容还没测量时 ScrollView 会把 scrollTo 夹成 0
-            // （clamp 里 my >= child 直接返回 0），换页之后列表就跳回顶部、页头跟着展开。
-            // 因此挂在列表自己的布局回调上：布局完成后用真实坐标恢复位置，并把焦点卡片带回可见区域。
-            list.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
-                override fun onLayoutChange(view: View,l: Int,t: Int,r: Int,b: Int,oldL: Int,oldT: Int,oldR: Int,oldB: Int) {
-                    view.removeOnLayoutChangeListener(this)
-                    scroll.post settle@{
-                        if(catalogScroll!==scroll) return@settle
-                        savedScroll?.let { scroll.scrollTo(0,it) }
-                        gridCards().firstOrNull { it.hasFocus() }?.let { card -> revealGridLine(card,false) }
-                        gridRestoring=false
-                    }
+            gridPosterHeight=fitted
+            gridRowStride=0
+            gridRows.forEach { holder -> holder.cards.forEach { card -> card.resizePoster(fitted) } }
+            // 行高先量准，再恢复位置：反过来的话 spacer 还按估算高度撑，恢复出来的位置是错的。
+            // 海报高度刚改过，这里量到的行高才是最终的；resizePoster 内部对同值不重设，不会白花布局。
+            measureRowStride()
+            savedScroll?.let { scroll.scrollTo(0,it) }
+            syncGridWindow(force=true,focusIndex=gridFocusIndex())
+            gridRestoring=false
+        }
+        // 兜底：视口尺寸万一没变化、上面的 post 没跑到，静默期不能一直挂着。
+        list.postDelayed({ if(catalogScroll===scroll) gridRestoring=false },400)
+        // 焦点落点与位置恢复都要等视口量到：spacer 撑出来的高度、窗口范围、行高
+        // 都以 `scroll.height` 为准，第一帧还没量到时算出来的是错的。
+        // 页头 / 顶部入口这类「确定不依赖视口」的落点直接给，不等。
+        when {
+            focusType -> firstHeadControl()?.requestFocus()
+            focusNav -> navEntry()?.requestFocus()
+            else -> scroll.post {
+                if(catalogScroll!==scroll) return@post
+                // 点了榜单 / 分类芯片的这一次，焦点已经交回那枚芯片（见 [restoreChipFocus]），
+                // 这里不许再抢：抢了就是「选完分类焦点又跳到内容区」。
+                if(chipHeld) return@post
+                when {
+                    loadingMore -> moreButton?.requestFocus()
+                    wanted==LOAD_MORE -> moreButton?.let { button -> button.requestFocus(); revealRow(gridRowCount()-1,false) }
+                    appendedIndex!=null -> focusGridIndex(appendedIndex,false)
+                    // 记住过焦点的卡片（同一页重建）优先；其次落到第一张卡——
+                    // 「换榜单 / 换分类 / 从首页进榜单」这类换列表的动作走的就是这一条。
+                    else -> focusGridIndex(gridItems.indexOfFirst { it.id==catalogFocus }.takeIf { it>=0 } ?: 0,false)
                 }
-            })
-            // 兜底：列表尺寸万一没有变化、布局回调不触发，静默期不能一直挂着。
-            list.postDelayed({ if(catalogScroll===scroll) gridRestoring=false },400)
+            }
         }
         // 首屏刚铺好就先把下一页取回来：用户第一次按下键时内容已经在手上。
-        prefetchNextPage()
+        // 换榜单 / 换分类期间屏上还是旧列表，这一下要跳过：不能拿旧列表去预取新列表的下一页。
+        if(!chipHeld) prefetchNextPage()
     }
     /**
      * 底部按钮文案。
@@ -1329,7 +1712,7 @@ class MainActivity: Activity() {
      */
     private fun loadMore() {
         if(!hasMore || !appendCatalog()) return
-        if(gridList==null) {
+        if(gridList==null || gridItems.isEmpty()) {
             moreFocus=null; page++; catalogFocus=""
             // 追加是同一页的原地重建：页头保持当前的收 / 展状态，不会因为加载更多又弹回来。
             keepTopAreaState=true
@@ -1345,6 +1728,9 @@ class MainActivity: Activity() {
      * 这就是「无感」的来源：请求发生在用户看到底部之前。
      */
     private fun prefetchNextPage() {
+        // 换榜单 / 换分类的请求还在路上：屏上那份列表属于上一条选择，
+        // 拿它去取「下一页」会把新列表的页码算乱（旧列表的追加会先落进 catalog）。
+        if(chipFocusKey!=null) return
         // [moreFailed] 之后不再自动重试：断网时滚动事件会把预取变成对着接口猛敲，
         // 等用户自己按下「加载失败 · 重试」再打一次就够了。
         if(screen!="catalog" || !appendCatalog() || !hasMore || moreInFlight || moreFailed || gridList==null) return
@@ -1378,8 +1764,8 @@ class MainActivity: Activity() {
      */
     private fun nearGridEnd(): Boolean {
         if(gridAtBottom(dp(240))) return true
-        val focused=gridRows.indexOfFirst { it.findFocus()!=null }
-        return focused>=0 && focused>=gridRows.size-2
+        val row=gridFocusIndex()?.let { it/GRID_COLUMNS } ?: return false
+        return row>=gridRowCount()-2
     }
     /**
      * 去取第 `page+1` 页。
@@ -1390,6 +1776,7 @@ class MainActivity: Activity() {
      * 只是把 [moreFocusWanted] 打开，落地时照样把焦点交过去。
      */
     private fun requestNextPage(userInitiated: Boolean) {
+        if(chipFocusKey!=null) return
         if(!hasMore || !appendCatalog() || gridList==null) return
         if(moreInFlight) {
             if(userInitiated) { moreVisible=true; moreFocusWanted=true; updateFooter() }
@@ -1430,31 +1817,40 @@ class MainActivity: Activity() {
         }
     }
     /**
-     * 把新取回的一页接在列表末尾：摘掉底部行 → 铺新行 → 放回底部行 → 重排焦点链。
-     * 内容只往视口下方长，滚动位置不需要（也不应该）做任何恢复。
+     * 把新取回的一页接在列表末尾。
+     *
+     * 窗口化之后这一步**不建任何 View**：只是把整份列表变长，再让两个 spacer 按新的行数
+     * 重算高度。视口上方的像素一个不动，滚动位置也不需要（也不应该）做任何恢复。
+     * 因此「加载更多」的代价是 O(1)，与已经加载了多少部剧无关。
      */
     private fun appendGridItems(added: List<Series>,focusTarget: String?) {
-        val list=gridList ?: return
-        val visible=added.filterNot { it.id in library.hidden() }
+        if(gridList==null) return
+        // 过滤规则必须与 catalogGrid 里算 displayed 的那一套完全一致，否则 gridItems 与
+        // 实际显示的内容会对不上，按索引算出来的焦点落点就会错位。
+        val visible=if(tab==TAB_HOME || tab==TAB_RANK || tab==TAB_CATEGORY) added.filterNot { it.id in library.hidden() } else added
         if(visible.isNotEmpty()) {
-            val paging=gridPaging
-            if(paging!=null) list.removeView(paging)
-            // 接着上一行的空位往下排：一页 20 部按六列切开，最后一行只有 2 张，
-            // 新的一页要把那 4 个空位填满才继续开新行，否则列表中间会凭空多出一条断行。
-            addGridRows(list,visible,gridCardWidth,gridGap,gridPosterHeight,gridRows.lastOrNull())
-            if(paging!=null) list.addView(paging,lp(-1,dp(TvStyle.BUTTON_NORMAL+2*TvStyle.SOFT_BAND+TvStyle.GAP_TIGHT)))
+            // 追加只是把「整份列表」变长：**一个 View 都不用建**。
+            // 底部那一行与两个 spacer 都按行数重算，视口上方的像素一个不动。
+            gridItems=gridItems+visible
+            syncGridWindow()
+            // 已经物化的那几行必须**重新绑一次**。
+            //
+            // 一页 20 部按六列切开，最后一行只有 2 张、后面 4 个槽位是空槽（见 [bindGridRow]）；
+            // 新的一页要填进这 4 个空槽。但追加时窗口范围没变，[syncGridWindow] 会走提前返回，
+            // 那一行不会重绑——于是那 4 个槽位一直是空槽，用户看到的是
+            // 「第 4 行只有 2 张，新内容直接从第 5 行开始」，中间像少了一段。
+            // 重绑的代价只有当前物化的那几行（≤ 一屏 + 2 行），与已加载多少无关。
+            rebindGridRows()
         }
         // hasMore 可能刚翻成 false（接上的是最后一页）：只有形态真的变了才重建底部这一行。
         // 没变就只改文案——重建会把焦点按着的「展示更多」按钮换掉，焦点会先掉一帧再回来。
         if(pagingHasMore!=hasMore) rebuildPagingRow() else updateFooter()
         wireGridFocus(null,moreButton?.takeIf { it.isFocusable })
-        val target=when {
-            focusTarget==null -> null
-            focusTarget==LOAD_MORE -> moreButton
-            else -> gridCards().firstOrNull { it.tag==focusTarget }
+        when {
+            focusTarget==null -> Unit
+            focusTarget==LOAD_MORE -> moreButton?.let { button -> button.requestFocus(); revealRow(gridRowCount()-1,true) }
+            else -> gridItems.indexOfFirst { it.id==focusTarget }.takeIf { it>=0 }?.let { index -> focusGridIndex(index,true) }
         }
-        // 用户自己按出来的追加才动焦点：焦点先离开底部按钮，再重建底部那一行，免得中途焦点掉到页头。
-        if(target!=null) focusGridCardAfterLayout(target,list)
     }
     /** 底部一行：已显示进度 + 「展示更多」。hasMore 变成 false 时只留进度文字。 */
     private fun fillPagingRow(paging: LinearLayout) {
@@ -1479,10 +1875,10 @@ class MainActivity: Activity() {
     /** 重建底部那一行（只有 hasMore 翻转时需要，其它情况走 [updateFooter] 就地改文案）。 */
     private fun rebuildPagingRow() {
         val paging=gridPaging ?: return
-        val keepFocus=moreButton!=null && moreButton!!.hasFocus()
+        val keepButtonFocus=moreButton!=null && moreButton!!.hasFocus()
         paging.removeAllViews()
         fillPagingRow(paging)
-        if(keepFocus && moreButton==null) gridRows.lastOrNull()?.getChildAt(0)?.requestFocus()
+        if(keepButtonFocus && moreButton==null) gridRows.lastOrNull()?.cards?.firstOrNull()?.requestFocus()
     }
     /** 底部文案与按钮状态就地更新：不动子控件，焦点不会掉。 */
     private fun updateFooter() {
@@ -1491,66 +1887,198 @@ class MainActivity: Activity() {
         (more as? TvButton)?.setLabel(moreLabel())
         more.alpha=if(moreVisible && moreInFlight) TvStyle.DISABLED_ALPHA else 1f
     }
-    /** 栅格里按屏幕顺序排列的全部卡片。 */
-    private fun gridCards(): List<View> = gridRows.flatMap { line -> (0 until line.childCount).map(line::getChildAt) }
-    /** 这一行是不是栅格里当前的最后一行（追加之后会变，所以每次现算）。 */
-    private fun isGridTail(line: View)=gridRows.lastOrNull()===line
-    /** 把某一行带进可视区所需的目标 scrollY；已经看得见就返回当前值。 */
-    private fun revealY(line: View,scroll: ScrollView): Int = when {
-        line.top<scroll.scrollY -> line.top
-        line.bottom>scroll.scrollY+scroll.height -> (line.bottom-scroll.height).coerceAtLeast(0)
-        else -> scroll.scrollY
+    /** 栅格里的全部卡片：只包含**当前物化的窗口**那几行（窗口外没有 View）。 */
+    private fun gridCards(): List<View> = gridRows.flatMap { holder -> holder.cards }
+
+    /** 一行是不是整份列表的最后一行（追加之后会变，所以每次现算）。 */
+    private fun isGridTail(holder: GridRow)=holder.index>=gridRowCount()-1
+
+    /** 整份列表的行数。 */
+    private fun gridRowCount()=if(gridItems.isEmpty()) 0 else (gridItems.size+GRID_COLUMNS-1)/GRID_COLUMNS
+
+    /**
+     * 一行的像素高度（含行间距）。
+     *
+     * 首帧还没量到时先按海报高度估一个：两个 spacer 必须在第一次布局之前就有高度，
+     * 否则 ScrollView 会把恢复位置夹成 0（与「列表还没测量就 scrollTo」是同一个坑）。
+     * 量到真实行高之后立刻修正一次，之后每帧都是纯算术。
+     */
+    private fun rowStride(): Int = if(gridRowStride>0) gridRowStride
+        else (gridPosterHeight+dp(2*TvStyle.SOFT_BAND+8)+dp(46)).coerceAtLeast(dp(120))
+
+    /**
+     * 重算两个 spacer 的高度。
+     *
+     * 列表总高度 = 行数 × 行高，与「一行一个 View 全量常驻」时完全一致，
+     * 因此滚动条范围、恢复位置、`gridAtBottom` 的判定都不变；
+     * 但撑起这个高度只需要两个 Space，不需要真的建出那几百行。
+     */
+    private fun updateGridSpacers() {
+        val stride=rowStride()
+        val total=gridRowCount()
+        val start=gridWindowStart.coerceAtLeast(0)
+        val end=if(gridWindowStart<0) 0 else start+gridRows.size
+        setSpacerHeight(gridTopSpacer,start*stride)
+        setSpacerHeight(gridBottomSpacer,((total-end).coerceAtLeast(0))*stride)
     }
-    /** 把某张卡片所在的行带进视口：只有真的在视口外才滚，看得见就不动。 */
-    private fun revealGridLine(card: View,smooth: Boolean) {
+
+    /** 只在高度真的变了才写回：滚动回调每次都会走到这里，无谓的 requestLayout 会多花一帧布局。 */
+    private fun setSpacerHeight(spacer: View?,height: Int) {
+        val params=spacer?.layoutParams as? LinearLayout.LayoutParams ?: return
+        if(params.height==height) return
+        params.height=height
+        spacer.layoutParams=params
+    }
+
+    /**
+     * 只物化视口附近那几行，并把两端进出的行回收进 [gridRowPool]。
+     *
+     * **整个函数的代价只与窗口大小有关，与已经加载了多少部剧无关**——
+     * 这就是「加载几百个卡片之后越来越卡」的根治点。滚动时通常只增删 0~1 行。
+     *
+     * [focusIndex] 指定「必须可见」的那张卡：焦点在窗口外时（追加后落到新行、
+     * 恢复上次焦点）把它所在的行一并纳入，否则请求焦点会落空。
+     */
+    private fun syncGridWindow(force: Boolean=false,focusIndex: Int?=null) {
+        val window=gridWindow ?: return
         val scroll=gridScroll ?: return
-        val line=card.parent as? View ?: return
-        val target=revealY(line,scroll)
-        if(target==scroll.scrollY) return
-        if(smooth) scroll.smoothScrollTo(0,target) else scroll.scrollTo(0,target)
+        if(gridSyncing) return
+        val total=gridRowCount()
+        if(total==0) return
+        gridSyncing=true
+        try { syncGridWindowLocked(force,focusIndex,window,scroll,total) } finally { gridSyncing=false }
     }
-    /**
-     * 追加之后把焦点交给新行的第一张卡。
-     *
-     * 必须等列表量完再请求焦点：新行还没测量时坐标还是 0，
-     * ScrollView 会按错误的坐标把列表滚到别处（这就是「加载完跳到奇怪的位置」的来源）。
-     */
-    private fun focusGridCardAfterLayout(target: View,list: LinearLayout) {
-        list.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
-            override fun onLayoutChange(view: View,l: Int,t: Int,r: Int,b: Int,oldL: Int,oldT: Int,oldR: Int,oldB: Int) {
-                view.removeOnLayoutChangeListener(this)
-                if(gridList!==list || !target.isAttachedToWindow) return
-                target.requestFocus()
-                gridScroll?.post { if(gridList===list) revealGridLine(target,true) }
+
+    private fun syncGridWindowLocked(force: Boolean,focusIndex: Int?,window: LinearLayout,scroll: ScrollView,total: Int) {
+        val stride=rowStride()
+        val viewport=scroll.height
+        // 视口上下各多留一行：焦点放大与「下一页」预取都需要相邻行已经在树上。
+        var first=if(viewport<=0) 0 else ((scroll.scrollY-dp(24))/stride-1).coerceAtLeast(0)
+        var last=if(viewport<=0) minOf(total-1,GRID_WINDOW_MIN_ROWS-1)
+            else ((scroll.scrollY+viewport+dp(24))/stride+1).coerceAtLeast(first).coerceAtMost(total-1)
+        focusIndex?.let { index ->
+            val row=(index/GRID_COLUMNS).coerceIn(0,total-1)
+            // 焦点行不在视口算出来的窗口里时，**以它为准重开一个窗口**，
+            // 而不是把「视口到它」之间的行全拉进来——那可能是几百行。
+            // 反过来的写法（first=min、last=max）在「恢复的焦点离视口很远」时会让区间反向，
+            // 结果是一个空窗口：spacer 撑出几百行的空白，而焦点目标永远不会被物化。
+            if(row<first || row>last) {
+                first=row
+                last=(row+GRID_WINDOW_MIN_ROWS-1).coerceAtMost(total-1)
             }
-        })
+        }
+        // 硬上限：任何情况下都不物化超过 [GRID_WINDOW_MAX_ROWS] 行。
+        if(last-first+1>GRID_WINDOW_MAX_ROWS) {
+            val focusRow=focusIndex?.let { it/GRID_COLUMNS }
+            last=when {
+                focusRow!=null && focusRow<=first+GRID_WINDOW_MAX_ROWS-1 -> first+GRID_WINDOW_MAX_ROWS-1
+                focusRow!=null -> { first=(focusRow-GRID_WINDOW_MAX_ROWS+1).coerceAtLeast(0); first+GRID_WINDOW_MAX_ROWS-1 }
+                else -> first+GRID_WINDOW_MAX_ROWS-1
+            }
+            last=last.coerceAtMost(total-1)
+        }
+        if(!force && gridWindowStart==first && gridRows.size==last-first+1) { updateGridSpacers(); return }
+        // 两端对齐：中间那几行走「只换绑定数据」的复用路径，因此滚动时视口内的卡片不会重建。
+        val keepFrom=maxOf(first,gridWindowStart)
+        val keepTo=minOf(last,gridWindowStart+gridRows.size-1)
+        if(gridRows.isEmpty() || keepFrom>keepTo) {
+            gridRows.toList().forEach(::recycleGridRow)
+            gridRows.clear(); gridWindowStart=first
+        } else {
+            // 丢掉前端多出来的行。**每丢一行窗口起点必须跟着 +1**：`gridWindowStart` 是
+            // `gridRows[0]` 的行号，删了首行却不推进起点，循环条件就永远成立，
+            // 一路删到空表再取 `first()` 就是 `NoSuchElementException`（2026-10-14 的崩溃）。
+            while(gridWindowStart<keepFrom && gridRows.isNotEmpty()) {
+                recycleGridRow(gridRows.first()); gridWindowStart++
+            }
+            // 丢掉后端多出来的行：起点不动，只是变短（size 缩小，条件会自然收敛）。
+            while(gridRows.isNotEmpty() && gridWindowStart+gridRows.size-1>keepTo) recycleGridRow(gridRows.last())
+            if(gridRows.isEmpty()) gridWindowStart=first
+        }
+        // 补齐到 [first,last]：前端补完再补后端，插进 window 的位置按行号算。
+        while(gridWindowStart>first) { gridWindowStart--; materializeGridRow(gridWindowStart,atFront=true) }
+        while(gridWindowStart+gridRows.size-1<last) materializeGridRow(gridWindowStart+gridRows.size,atFront=false)
+        updateGridSpacers()
+        if(gridRowStride<=0) measureRowStride()
     }
+
     /**
-     * 往栅格里铺卡片：从 [line] 已有的卡片后面接着排，排满 [GRID_COLUMNS] 张才开新行。
+     * 同步量一次行高。
      *
-     * 「接着上一行的空位」不是可选项：一页 20 部按六列切开，最后一行只有 2 张，
-     * 下一页的头 4 部必须落进这 4 个空位里，否则整份列表中间会凭空多出一条断行。
-     * 首屏与向下追加共用这一份实现，因此两边的尺寸、间距、焦点与点击行为完全一致。
+     * 行高 = 海报高度 + 剧名 + 状态行 + 卡片内边距 + 行间距，与卡片里的文字度量有关，
+     * 因此不能写死一个常数（系统字号放大时会变）。这里量的是**行容器**：
+     * 它已经量过（或者现在就量一次），量与布局走的是同一套规则，比单量一张卡可靠。
+     * 量到之后 spacer 的高度与滚动位置一次到位，不必再等异步回调纠偏。
      */
-    private fun addGridRows(list: LinearLayout,items: List<Series>,width: Int,gap: Int,posterHeight: Int,line: LinearLayout?=null) {
-        var target=line
-        var column=target?.childCount ?: 0
-        items.forEach { item ->
-            if(target==null || column>=GRID_COLUMNS) { target=newGridRow(list); column=0 }
-            val row=target!!
-            row.addView(gridCard(row,item,posterHeight),lp(width,-2).apply { if(column<GRID_COLUMNS-1) rightMargin=gap })
-            column++
+    private fun measureRowStride() {
+        val line=gridRows.firstOrNull()?.line ?: return
+        if(line.width<=0 && gridCardWidth>0) line.measure(
+            View.MeasureSpec.makeMeasureSpec(resources.displayMetrics.widthPixels-2*pageInset(),View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED)
+        )
+        val measured=(if(line.height>0) line.height else line.measuredHeight)+dp(6)
+        if(measured>dp(6) && measured!=gridRowStride) { gridRowStride=measured; updateGridSpacers() }
+    }
+
+    /** 取一个行容器：优先用回收池里的（View 与卡片都复用），池空才新建。 */
+    private fun obtainGridRow(): GridRow {
+        gridRowPool.removeLastOrNull()?.let { holder -> return holder }
+        val line=row().apply { gravity=Gravity.TOP; clipChildren=false; clipToPadding=false }
+        val holder=GridRow(line)
+        repeat(GRID_COLUMNS) {
+            val card=PosterCard(this,gridPosterHeight,::loadCover)
+            wireGridCard(card)
+            line.addView(card,lp(gridCardWidth,-2).apply { if(it<GRID_COLUMNS-1) rightMargin=gridGap })
+            holder.cards+=card
+        }
+        return holder
+    }
+
+    /** 把一个行容器放进窗口（[atFront] 决定插在最前还是最后）并绑定它那一行的数据。 */
+    private fun materializeGridRow(index: Int,atFront: Boolean) {
+        val window=gridWindow ?: return
+        val holder=obtainGridRow()
+        holder.index=index
+        // 复用的行可能带着上一页的海报高度（同值不重设，见 PosterCard.resizePoster）。
+        holder.cards.forEach { card -> card.resizePoster(gridPosterHeight) }
+        bindGridRow(holder)
+        // 行间距 6dp：与「一行一个 View」时代一致，spacer 的行高按「行高 + 行间距」算。
+        window.addView(holder.line,if(atFront) 0 else window.childCount,lp(-1,-2).apply { bottomMargin=dp(6) })
+        if(atFront) gridRows.add(0,holder) else gridRows.add(holder)
+    }
+
+    /** 把一行交回回收池：从窗口摘下来，但 View 与卡片都留着复用。 */
+    private fun recycleGridRow(holder: GridRow) {
+        gridWindow?.removeView(holder.line)
+        gridRows.remove(holder)
+        // 池子封顶：滚动时同时进出的行只有个位数，留 4 行足够，
+        // 免得极端情况（快速来回甩）把池子撑成第二个「全量列表」。
+        if(gridRowPool.size<4) gridRowPool+=holder
+    }
+
+    /** 按 [GridRow.index] 绑定这一行里每张卡的剧集、状态与封面（同值不重设，见 [PosterCard.bind]）。 */
+    private fun bindGridRow(holder: GridRow) {
+        holder.cards.forEachIndexed { column,card ->
+            val index=holder.index*GRID_COLUMNS+column
+            val item=gridItems.getOrNull(index)
+            if(item==null) {
+                // 最后一行不满时留空槽：卡片留在原位（保持列对齐）但不显示，
+                // 封面也清掉——不为一张看不见的卡留住位图。
+                card.series=null
+                card.visibility=View.INVISIBLE
+                card.setCover("")
+                return@forEachIndexed
+            }
+            card.visibility=View.VISIBLE
+            bindGridCard(card,item)
         }
     }
-    /** 开一行新的海报卡：宽度铺满、行间留 6dp，行本身登记进 [gridRows] 供焦点链使用。 */
-    private fun newGridRow(list: LinearLayout): LinearLayout {
-        val line=row().apply { gravity=Gravity.TOP; clipChildren=false; clipToPadding=false }
-        list.addView(line,lp(-1,-2).apply { bottomMargin=dp(6) })
-        gridRows+=line
-        return line
-    }
-    /** 一张海报卡：数据绑定、点击 / 长按 / 菜单 / 焦点行为都在这里，首屏与追加共用。 */
-    private fun gridCard(line: LinearLayout,item: Series,posterHeight: Int): PosterCard {
+
+    /**
+     * 一张海报卡的**数据绑定**（不含监听器）：监听器在 [wireGridCard] 里只装一次，
+     * 因此滚出再滚回来只是换一遍文字与封面，不再新建 View、不再重复挂监听。
+     */
+    private fun bindGridCard(card: PosterCard,item: Series) {
         val position=if(tab==TAB_RANK) ranking?.positions?.get(item.id) else null
         val rank=position?.rank
         val progress=if(collection=="history") library.progress(item.id) else null
@@ -1566,72 +2094,168 @@ class MainActivity: Activity() {
             else -> item.badge.takeIf { it.isNotBlank() && it!=statusText }
                 ?.let { value -> if(value.length<=9) value else value.take(8)+"…" } ?: ""
         }
-        val card=PosterCard(this,posterHeight,::loadCover)
+        card.series=item
+        card.tag=item.id
+        card.visibility=View.VISIBLE
         card.bind(item,statusText,badgeText,
             progress?.takeIf { it.duration>0 }?.let { (it.position*100/it.duration).toInt().coerceIn(0,100) },
             rank!=null && rank<=3)
-        card.tag=item.id; catalogCards[item.id]=card; cardImages[item.id]=card.image to item.cover
-        if(collection=="favorites") favoriteBadges[item.id]=card.status
-        card.setOnClickListener { catalogFocus=item.id; openDetail(item,collection=="history") }
-        card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
+    }
+
+    /**
+     * 装一张卡片的监听器：**只在卡片新建时调一次**。
+     *
+     * 卡片会被复用，因此回调里一律通过 [PosterCard.series] 取「这一张卡现在是谁」，
+     * 不捕获某一次的 item。
+     */
+    private fun wireGridCard(card: PosterCard) {
+        card.setOnClickListener { card.series?.let { item -> catalogFocus=item.id; openDetail(item,collection=="history") } }
+        card.setOnLongClickListener { card.series?.let { item -> catalogFocus=item.id; quickActions(item,card) }; true }
         card.setOnKeyListener { _,key,event ->
+            val item=card.series
             when {
                 key==KeyEvent.KEYCODE_MENU -> {
-                    if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }
+                    if(event.action==KeyEvent.ACTION_UP && item!=null) { catalogFocus=item.id; quickActions(item,card) }
                     true
                 }
-                // 停在最后一行再按下键就是「继续往下看」：不经过底部按钮，直接把下一页接上，
-                // 新内容到了就落到新行的第一张卡上。预取命中时这一下是瞬时的。
-                key==KeyEvent.KEYCODE_DPAD_DOWN && event.action==KeyEvent.ACTION_DOWN && event.repeatCount==0 &&
-                    isGridTail(line) && appendCatalog() && hasMore -> { loadMore(); true }
+                // 焦点在窗口的上下边界上、而目标行还没物化时，先把它物化再按索引落过去。
+                // 已经物化的情况交给 nextFocusUpId / nextFocusDownId（框架自己走，不经过这里）。
+                (key==KeyEvent.KEYCODE_DPAD_UP || key==KeyEvent.KEYCODE_DPAD_DOWN) && event.action==KeyEvent.ACTION_DOWN -> {
+                    val holder=gridRows.firstOrNull { it.line===card.parent } ?: return@setOnKeyListener false
+                    val column=holder.cards.indexOf(card)
+                    val row=holder.index+(if(key==KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)
+                    val target=row*GRID_COLUMNS+column
+                    when {
+                        // 第一行再按上键：焦点交回页头那一行（榜单 / 分类芯片、搜索框）。
+                        // 页头收着的时候这里顺手把它展开，否则焦点会落在一条高度为 0 的看不见的行上。
+                        key==KeyEvent.KEYCODE_DPAD_UP && row<0 -> {
+                            val head=headFocusTarget()
+                            if(head!=null) { focusHead(head); true } else false
+                        }
+                        // 目标列在最后一行不满时没有卡片：这一下交回框架，由 nextFocusDownId
+                        // 落到「展示更多」上，而不是被吞掉什么都不做。
+                        row in 0 until gridRowCount() && target in gridItems.indices -> {
+                            // 只有焦点**真的移动了**才吃掉这一下：目标行因为窗口还没物化而落空时，
+                            // 交回框架走 nextFocusUpId / nextFocusDownId，不能变成「按了没反应」。
+                            focusGridIndex(target,false)
+                            gridFocusIndex()==target
+                        }
+                        // 最后一行再按下键就是「继续往下看」：不经过底部按钮，直接把下一页接上。
+                        key==KeyEvent.KEYCODE_DPAD_DOWN && isGridTail(holder) && appendCatalog() && hasMore -> { loadMore(); true }
+                        else -> false
+                    }
+                }
                 else -> false
             }
         }
         card.setOnFocusChangeListener { _,focused ->
             card.setFocused(focused)
             if(focused) {
-                catalogFocus=item.id; loadCover(card.image,item.cover)
-                // 焦点走到倒数两行就把下一页取回来，用户真按下去时内容已经在手上。
-                if(gridRows.indexOf(line)>=gridRows.size-2) prefetchNextPage()
-                if(!gridRestoring) {
-                    val scroll=gridScroll
-                    scroll?.post { if(gridScroll===scroll) scroll.smoothScrollTo(0,revealY(line,scroll)) }
+                val holder=gridRows.firstOrNull { it.line===card.parent }
+                card.series?.let { item ->
+                    catalogFocus=item.id; loadCover(card.image,item.cover)
+                    // 焦点走到倒数两行就把下一页取回来，用户真按下去时内容已经在手上。
+                    if(holder!=null && holder.index>=gridRowCount()-2) prefetchNextPage()
                 }
+                if(holder==null) return@setOnFocusChangeListener
+                // 顺手把下一行的封面按「预取」优先级排上队：用户按下键时图已经在内存缓存里。
+                // 队列满时先被丢掉的正是预取，因此不会饿着当前可见的卡（见 ArtworkLoader.MAX_PENDING）。
+                gridRows.firstOrNull { it.index==holder.index+1 }?.cards?.forEach { next ->
+                    next.series?.cover?.takeIf { it.isNotBlank() }?.let { url -> prefetchCover(next.image,url) }
+                }
+                if(!gridRestoring) revealRow(holder.index,true)
             }
         }
-        return card
     }
+
+    /** 把某一行带进视口：窗口化之后行号就是坐标，不需要等布局。 */
+    private fun revealRow(row: Int,smooth: Boolean) {
+        val scroll=gridScroll ?: return
+        val stride=rowStride()
+        val top=row*stride
+        val target=when {
+            top<scroll.scrollY -> top
+            top+stride>scroll.scrollY+scroll.height -> (top+stride-scroll.height).coerceAtLeast(0)
+            else -> return
+        }
+        if(smooth) scroll.smoothScrollTo(0,target) else scroll.scrollTo(0,target)
+    }
+
     /**
-     * 重算整张栅格的焦点链。
+     * 把焦点按**全局索引**落到某张卡上。
      *
-     * 行数不多（一页 20 部、六列），整体重算比增量维护更不容易出错；
-     * 追加之后也走同一条路，因此新行与旧行的上下左右关系永远一致——
-     * 这就是「不会排列混乱」在焦点层面的保证。
+     * 目标行不在当前窗口里时，先把列表滚到那一行、再按新的视口算窗口——
+     * 而不是「把窗口拉大到包含它」：后者在「恢复的焦点离视口很远」时会把中间几百行全物化出来。
+     * 滚动是同步的（不用平滑动画），因此后面算出来的窗口与坐标都是确定的。
+     */
+    private fun focusGridIndex(index: Int,smooth: Boolean=true) {
+        if(index !in gridItems.indices) return
+        val row=index/GRID_COLUMNS
+        val scroll=gridScroll
+        if(scroll!=null && (gridRows.none { it.index==row })) {
+            val stride=rowStride()
+            val top=row*stride
+            val target=when {
+                top<scroll.scrollY -> top
+                top+stride>scroll.scrollY+scroll.height -> (top+stride-scroll.height).coerceAtLeast(0)
+                else -> scroll.scrollY
+            }
+            if(target!=scroll.scrollY) scroll.scrollTo(0,target)
+        }
+        syncGridWindow(focusIndex=index)
+        val holder=gridRows.firstOrNull { it.index==row } ?: return
+        val card=holder.cards.getOrNull(index%GRID_COLUMNS) ?: return
+        card.requestFocus()
+        if(smooth) revealRow(row,true)
+    }
+
+    /**
+     * 重绑当前窗口那几行（剧集状态变了：收藏 / 历史进度 / 榜单名次刷新）。
+     *
+     * 窗口化之后「就地更新一张卡」不再按 id 找控件，而是重绑可见的那几十张——
+     * 代价恒定，且不会把更新漏在还没物化的行上（它们物化时自然会绑到最新状态）。
+     */
+    private fun rebindGridRows() {
+        gridRows.forEach { holder -> if(holder.line.isAttachedToWindow) bindGridRow(holder) }
+    }
+
+    /** 当前焦点所在的全局索引；焦点不在栅格里时返回 null。 */
+    private fun gridFocusIndex(): Int? {
+        gridRows.forEach { holder ->
+            val column=holder.cards.indexOfFirst { it.hasFocus() }
+            if(column>=0) return holder.index*GRID_COLUMNS+column
+        }
+        return null
+    }
+
+    /**
+     * 重算栅格的焦点链。
+     *
+     * 窗口化之后这里只处理**当前物化的那几行**（≤ 一屏 + 2 行），因此代价与已加载数量无关。
+     * 窗口上下边界上的「目标行还没物化」由 [wireGridCard] 的按键处理按索引补物化，
+     * 因此链在这些边界上写成「指向自己」也不会把焦点卡死。
      */
     private fun wireGridFocus(prev: View?,next: View?) {
-        val rows=gridRows.filter { it.parent!=null }
+        val rows=gridRows.sortedBy { it.index }
         if(rows.isEmpty()) return
-        // 栅格第一行按上键回到它正上方那一行：搜索页是输入框、分类页是当前小类芯片、
-        // 榜单页是当前榜单芯片、本机记录页是它自己的动作按钮，其余页面退到顶部圆形入口。
-        val headUp=searchInput?.id
-            ?: categoryTagButtons[categoryPath]?.id
-            ?: boardButtons[rankBoard]?.id
-            ?: favoriteCheck?.id ?: historyManage?.id ?: navEntry()?.id
-        val first=rows.first().getChildAt(0)?.id ?: return
-        rows.forEachIndexed { rowIndex,line ->
-            val cards=(0 until line.childCount).map(line::getChildAt)
-            cards.forEachIndexed { columnIndex,card ->
-                card.nextFocusLeftId=cards[(columnIndex-1).coerceAtLeast(0)].id
-                card.nextFocusRightId=cards[(columnIndex+1).coerceAtMost(cards.lastIndex)].id
-                card.nextFocusUpId=if(rowIndex==0) (headUp ?: card.id) else rows[rowIndex-1].let { up ->
-                    up.getChildAt(columnIndex.coerceAtMost(up.childCount-1)).id
+        // 栅格第一行按上键回到它正上方那一行（见 [headFocusTarget]）。
+        val headUp=headFocusTarget()?.id
+        val first=rows.first().cards.firstOrNull()?.id ?: return
+        val lastRow=gridRowCount()-1
+        rows.forEachIndexed { position,holder ->
+            val cards=holder.cards
+            cards.forEachIndexed { column,card ->
+                card.nextFocusLeftId=cards[(column-1).coerceAtLeast(0)].id
+                card.nextFocusRightId=cards[(column+1).coerceAtMost(cards.lastIndex)].id
+                card.nextFocusUpId=when {
+                    position>0 -> rows[position-1].cards[minOf(column,rows[position-1].cards.size-1)].id
+                    holder.index==0 -> headUp ?: card.id
+                    else -> card.id
                 }
                 card.nextFocusDownId=when {
-                    rowIndex<rows.lastIndex -> rows[rowIndex+1].let { down ->
-                        down.getChildAt(columnIndex.coerceAtMost(down.childCount-1)).id
-                    }
-                    next?.isFocusable==true -> next.id
-                    prev?.isFocusable==true -> prev.id
+                    position<rows.lastIndex -> rows[position+1].cards[minOf(column,rows[position+1].cards.size-1)].id
+                    holder.index>=lastRow -> next?.takeIf { it.isFocusable }?.id
+                        ?: prev?.takeIf { it.isFocusable }?.id ?: card.id
                     else -> card.id
                 }
             }
@@ -1639,15 +2263,22 @@ class MainActivity: Activity() {
         navIcons().forEach { it.nextFocusDownId=first }
         historyManage?.nextFocusDownId=first
         favoriteCheck?.nextFocusDownId=first
+        // 榜单 / 一级分类芯片在页头最上面一行：按下键先进自己这一页的第二行（二级分类），
+        // 没有第二行时直接进内容第一张卡。二级分类芯片按下键就是内容第一张卡。
         boardButtons.values.forEach { it.nextFocusDownId=searchInput?.id ?: first }
         categoryGroupButtons.values.forEach { it.nextFocusDownId=categoryTagButtons[categoryPath]?.id ?: first }
         categoryTagButtons.values.forEach { it.nextFocusDownId=first }
-        searchInput?.nextFocusDownId=first
-        val shortcut=rows.first().getChildAt(minOf(4,rows.first().childCount-1)).id
-        searchButton?.nextFocusDownId=shortcut
-        searchActions.forEach { it.nextFocusDownId=shortcut }
+        // 搜索页：输入框与「搜索 / 历史 / 手机输入」都在导航栏里，按下键一律先落进
+        // 输入框下面那一行（提示词 / 热搜词），没有那一行时直接进内容第一张卡。
+        val hintDown=suggestButtons.firstOrNull()?.id ?: first
+        searchInput?.nextFocusDownId=hintDown
+        searchButton?.nextFocusDownId=hintDown
+        searchActions.forEach { it.nextFocusDownId=hintDown }
+        // 提示词 / 热搜芯片按下键进内容第一张卡。芯片是**渲染之后才有的**，
+        // 渲染那一刻栅格可能还没铺好（那时它们只能指向自己），因此这里每次重排都补一次。
+        suggestButtons.forEach { it.nextFocusDownId=first }
         // 列表最后一行按下键落在底部「展示更多」上，再按一次（确认或下键）就追加下一页。
-        moreButton?.nextFocusUpId=rows.last().getChildAt(0).id
+        moreButton?.nextFocusUpId=rows.last().cards.firstOrNull()?.id ?: first
     }
     /**
      * 已显示进度。榜单自带总页数，所以能给「N / M 部」；
@@ -1745,17 +2376,18 @@ class MainActivity: Activity() {
         // 首页剧架与排行榜页都直接按「本机隐藏」过滤，所以在这两处隐藏一部剧要就地重画列表
         // （本机记录页里的条目本身就不是热播内容，隐藏那一项在那里不出现）。
         if(removed && (localCatalog() || tab==TAB_HOME || tab==TAB_RANK)) {
-            val oldIds=catalogCards.keys.toList(); val index=oldIds.indexOf(changedId).coerceAtLeast(0)
+            val oldIds=gridItems.map { it.id }; val index=oldIds.indexOf(changedId).coerceAtLeast(0)
             if(localCatalog()) {
                 catalog=localItems(); page=page.coerceIn(1,maxOf(1,(catalog.size+pageSize-1)/pageSize)); hasMore=page*pageSize<catalog.size
             }
             val remaining=if(localCatalog()) catalog.drop((page-1)*pageSize).take(pageSize) else catalog.filterNot { it.id in library.hidden() }
             catalogFocus=remaining.getOrNull(index.coerceAtMost((remaining.size-1).coerceAtLeast(0)))?.id.orEmpty()
             rememberScroll(catalogPageKey,catalogScroll?.scrollY ?: 0)
-            artwork.cancelPage(); favoriteBadges.clear()
+            artwork.cancelPage()
             catalogBody?.let { body -> body.removeAllViews(); catalogGrid(body,false) }
         } else {
-            favoriteBadges[changedId]?.text=library.favoriteLabel(changedId)
+            // 只是收藏标签变了：重绑当前窗口那几行就够了（代价与已加载数量无关）。
+            rebindGridRows()
         }
     }
     /**
@@ -1806,7 +2438,7 @@ class MainActivity: Activity() {
     }
     private fun refreshFavoriteLabels() {
         if(screen!="catalog" || !library.isLoaded) return
-        favoriteBadges.forEach { (id,label) -> val value=library.favoriteLabel(id); if(label.text.toString()!=value) label.text=value }
+        rebindGridRows()
         favoriteCheck?.text=if(favoriteMonitor.running) "正在检查…" else "检查更新"
         favoriteStatus?.text=favoriteMonitor.status
         val home=homeScreen
@@ -2124,6 +2756,238 @@ class MainActivity: Activity() {
      * 搜索：**不分内容类型**（顶部那两个「漫剧 / 短剧」开关已经去掉）。
      * 漫剧与短剧 / 真人剧的搜索结果合并去重后一起显示，由 [ContentRepository.search] 负责。
      */
+    /**
+     * 搜索页的搜索控件：**整条都在导航栏里**（搜索框 + 搜索 / 历史）。
+     *
+     * 用户从别的页面按「搜索」图标进来就是要打字，输入框再占页面第一条会白花一屏的高度；
+     * 放进导航栏之后页面第一行就是提示词 / 热搜词，输入框与它上下相邻，方向键一步就到。
+     *
+     * 输入框吃掉导航栏中间的弹性空间（`weight=1`），因此它总是这一行里最宽的一件；
+     * 右边两个按钮按内容宽度排，圆形入口跟在最后。
+     */
+    private fun searchBar(top: LinearLayout,requestFocus: Boolean) {
+        // 搜索框与同一行的按钮共用一套尺寸令牌：48dp 底板、胶囊圆角、左右 28dp 内边距，
+        // 因此输入框和「搜索 / 历史」在一条基线上；差别只在「凹槽 vs 凸起」这一层语义。
+        val searchBand=dp(TvStyle.SOFT_BAND)
+        val input=EditText(this).apply {
+            // 提示里把「怎么打字」写清楚：电视上没有手机输入按钮之后，用户靠系统输入法
+            // （遥控器方向键选字）或外接键盘打字，这一行是他唯一能看到说明的地方。
+            //
+            // 提示文字**比正文字号小一档**（[SEARCH_HINT_TEXT]）：正文是 20sp 的粗体，
+            // 提示跟着那么大的话一句话就被截断，只能显示半句；小一档之后整句都放得下。
+            // `hint` 只接受 CharSequence，字号靠 AbsoluteSizeSpan 挂在片段上。
+            id=View.generateViewId()
+            hint=android.text.SpannableString(SEARCH_HINT).apply {
+                setSpan(
+                    android.text.style.AbsoluteSizeSpan(SEARCH_HINT_TEXT.toInt(),true),
+                    0,length,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            setText(query)
+            textSize=SEARCH_INPUT_TEXT; setTypeface(typeface,Typeface.BOLD)
+            setTextColor(TvStyle.text); setHintTextColor(TvStyle.muted); isSingleLine=true; maxLines=1
+            ellipsize=TextUtils.TruncateAt.END
+            filters=arrayOf(android.text.InputFilter.LengthFilter(80))
+            imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            includeFontPadding=false
+            // 输入框是一条「压进底板」的凹槽：内边距里含柔光带，内阴影才有地方画。
+            // 左右内边距跟紧凑档按钮走（[TvStyle.BUTTON_PAD_COMPACT]），与同一行的按钮对齐。
+            setPadding(dp(TvStyle.BUTTON_PAD_COMPACT)+searchBand,searchBand,dp(TvStyle.BUTTON_PAD_COMPACT)+searchBand,searchBand)
+            background=softPanel(TvStyle.well,TvStyle.RADIUS_PILL,style=SoftStyle.INSET,ring=TvStyle.outline,ringWidth=1)
+            setOnFocusChangeListener { view,_ ->
+                val focused=view.hasFocus()
+                // 凹陷控件的焦点没法靠「打亮」表达，只能把槽压得更深、让这条中性细线加深。
+                // 线色取 45% 文字基色（浅色主题是深墨、深色主题是暖白），不是强调色——
+                // 选框不再有任何颜色。
+                view.background=softPanel(
+                    TvStyle.well,TvStyle.RADIUS_PILL,style=SoftStyle.INSET,
+                    ring=if(focused) TvStyle.focusLine else TvStyle.outline,
+                    ringWidth=1,
+                    depth=if(focused) 1.6f else 1.1f)
+            }
+            // EditText 自己会把上下键吃掉做光标移动，焦点因此困在输入框里出不去。
+            // 这两下在这里显式交回页面：上=顶部圆形入口，下=提示词 / 热搜词那一行（没有时退到内容第一张卡）。
+            setOnKeyListener { view,keyCode,event ->
+                if(event.action!=KeyEvent.ACTION_DOWN || (keyCode!=KeyEvent.KEYCODE_DPAD_UP && keyCode!=KeyEvent.KEYCODE_DPAD_DOWN)) false
+                else {
+                    val target=when {
+                        keyCode==KeyEvent.KEYCODE_DPAD_DOWN -> root.findViewById<View>(view.nextFocusDownId)?.takeIf { it.isShown && it.isFocusable }
+                            ?: gridCards().firstOrNull { it.isShown } ?: navEntry()?.takeIf { it.isShown }
+                        else -> root.findViewById<View>(view.nextFocusUpId)?.takeIf { it.isShown && it.isFocusable }
+                            ?: navEntry()?.takeIf { it.isShown }
+                    }
+                    if(target==null) false
+                    else {
+                        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(view.windowToken,0)
+                        view.clearFocus(); target.requestFocus(); true
+                    }
+                }
+            }
+        }
+        top.addView(input,lp(dp(SEARCH_INPUT_WIDTH),dp(SEARCH_INPUT_HEIGHT+2*TvStyle.SOFT_BAND)).apply {
+            // 固定宽度（不再吃满弹性空间）：搜索框与后面两枚按钮是一组，靠左聚在一起，
+            // 省下来的宽度留给这一组与右边那排圆形入口之间的空白（见本函数末尾的 Space）。
+            leftMargin=dp(TvStyle.GAP_GROUP); rightMargin=dp(TvStyle.GAP_TIGHT)
+        })
+        fun search() { val next=input.text.toString().trim(); if(next.isBlank()) { input.requestFocus(); return }; runSearch(next) }
+        searchInput=input
+        // 两个按钮用紧凑档（40dp 底板 / 15sp）：导航栏那一行要放的东西多，
+        // 常规档（48dp / 16sp）摆进去整行会偏高偏长。
+        // 最小宽度放开到 [SEARCH_BUTTON_MIN_WIDTH]（按文字宽收紧），
+        // 间距用 [TvStyle.GAP_TIGHT]：这两枚按钮与输入框是**一组**，彼此靠近。
+        searchButton=addButton(top,"搜索",size=ButtonSize.COMPACT,gap=TvStyle.GAP_TIGHT) { search() }
+            .apply { minimumWidth=dp(SEARCH_BUTTON_MIN_WIDTH) }
+        lateinit var recent: TvButton
+        recent=addButton(top,"历史",size=ButtonSize.COMPACT,gap=TvStyle.GAP_TIGHT) { showSearchHistory(recent) }
+            .apply { minimumWidth=dp(SEARCH_BUTTON_MIN_WIDTH) }
+        // 「手机输入」按钮去掉了：这一行只剩「搜索 / 历史」两个按钮。
+        searchActions.addAll(listOf(recent))
+        // 这一组（输入框 + 搜索 + 历史）与右边那排圆形入口之间留一段弹性空白：
+        // 前者靠左，后者仍然贴在右边，中间因此有一段看得出来的距离。
+        top.addView(Space(this),lp(0,1).apply { weight=1f })
+        input.setOnEditorActionListener { _,_,_-> search(); true }
+        // 打字就取提示词（去抖）；页面重建后监听器跟着输入框一起换新的。
+        input.addTextChangedListener(object: android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?,start: Int,count: Int,after: Int) {}
+            override fun onTextChanged(s: CharSequence?,start: Int,before: Int,count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) { scheduleSuggestions(s?.toString().orEmpty()) }
+        })
+        // 进搜索页、还没有关键词时焦点直接落在输入框上：这一页要「等用户输入」，
+        // 焦点停在顶部圆形入口上等于让用户先按一下右键才能打字。
+        // 有关键词（刚搜完切回这一页）时不抢焦点：那时焦点应该在结果或它原来的位置上。
+        //
+        // 这里**不能**顺手设 `nextFocusUpId`：这一排圆形入口是在 [searchBar] 之后才建好的，
+        // 此刻 `navEntry()` 还是 null（设了就等于把「按上」指向自己）。上键的落点统一在
+        // 建完导航栏之后由 [wireHeadNavUp] 接上。
+        if(requestFocus) input.post { if(input.isAttachedToWindow) input.requestFocus() }
+    }
+    /**
+     * 搜索页导航栏里的控件「按上键」都回到那一排圆形入口。
+     *
+     * 必须在**圆形入口建好之后**调：导航栏是先建标题与搜索控件、最后才加四个圆形入口的，
+     * 建搜索控件时 `navEntry()` 还是 null，那时设上键会把焦点指向自己。
+     */
+    private fun wireHeadNavUp() {
+        val up=navEntry()?.id ?: return
+        searchInput?.nextFocusUpId=up
+        searchButton?.nextFocusUpId=up
+        searchActions.forEach { it.nextFocusUpId=up }
+    }
+    /**
+     * 输入变化 → 去抖取提示词。
+     *
+     * 去抖 220ms：每敲一个字都发请求会把接口打满，也会让那一行一直闪。
+     * 清空输入时立刻清掉那一行（不发请求）。
+     */
+    private fun scheduleSuggestions(text: String) {
+        suggestRun.getAndSet(null)?.let { main.removeCallbacks(it) }
+        val clean=text.trim()
+        // 清空输入：换回热搜词（而不是留一行空白）。
+        if(clean.isEmpty()) { suggestToken.incrementAndGet(); loadHotSearches(); return }
+        val run=Runnable { fetchSuggestions(clean) }
+        suggestRun.set(run)
+        main.postDelayed(run,SUGGEST_DEBOUNCE)
+    }
+    /**
+     * 取一次热搜词（搜索页空输入时铺在输入框下面那一行）。
+     *
+     * 与提示词共用 [suggestRow] 那一行与同一套令牌：热搜词是「没有输入」时的默认内容，
+     * 一旦开始打字就换成提示词。走自己的线程，不占用 [work] 那条导航通道。
+     */
+    private fun loadHotSearches() {
+        val ticket=suggestToken.incrementAndGet()
+        suggestJob?.cancel(true)
+        suggestJob=io.submit {
+            val result=runCatching { repository.hotSearches() }.getOrDefault(emptyList())
+            main.post {
+                if(isDestroyed || screen!="catalog" || tab!=TAB_SEARCH) return@post
+                if(ticket!=suggestToken.get()) return@post
+                // 用户已经开始打字了（输入框里有内容）：这一批热搜词让位给提示词。
+                if((searchInput as? EditText)?.text?.toString()?.trim().orEmpty().isNotEmpty()) return@post
+                renderHintRow(result)
+            }
+        }
+    }
+    /**
+     * 取一次提示词。
+     *
+     * 请求走自己的线程与令牌（不占用 [work] 那条「一次导航一个请求」的通道）：
+     * 它是**边打字边发**的，绝不能把页面重排、更不能取消用户正在等的搜索。
+     * 结果回来时先比对令牌与当前输入框内容——晚回来的旧结果直接丢掉。
+     */
+    private fun fetchSuggestions(keyword: String) {
+        suggestJob?.cancel(true)
+        val ticket=suggestToken.incrementAndGet()
+        suggestJob=io.submit {
+            val result=runCatching { repository.suggestions(keyword,SUGGEST_COUNT) }.getOrDefault(emptyList())
+            main.post {
+                if(isDestroyed || screen!="catalog" || tab!=TAB_SEARCH) return@post
+                if(ticket!=suggestToken.get()) return@post
+                // 输入框里的词已经变了（用户又敲了字）：这一批已经过时。
+                val current=(searchInput as? EditText)?.text?.toString()?.trim().orEmpty()
+                if(current!=keyword) return@post
+                renderHintRow(result.map { it.name })
+            }
+        }
+    }
+    /**
+     * 重建输入框下面那一行（热搜词 / 提示词共用）。
+     *
+     * **只动这一行**：换关键词、热搜换成提示词都不重画整页，因此输入时页面不会闪。
+     * 每一枚芯片都是**一个搜索词**：点了就把这个词填进输入框并搜（见 [runSearch]）——
+     * 即使服务端在这一条上给了剧集信息（`short_play_name`），也不直接跳简介页：
+     * 那一行是「搜索建议」，用户点它是想搜这个词，不是想跳过搜索结果。
+     * 空列表时整行隐藏，不留空槽。
+     */
+    private fun renderHintRow(items: List<String>) {
+        val line=suggestLine ?: return
+        val scroll=suggestRow ?: return
+        suggestButtons.clear()
+        line.removeAllViews()
+        if(items.isEmpty()) {
+            scroll.visibility=View.GONE
+            // 这一行收起来之后，导航栏里那几件（输入框 / 搜索 / 历史 / 手机输入）按下键
+            // 要回到内容第一张卡——不能指向一条看不见的行。
+            gridCards().firstOrNull()?.let { card ->
+                searchInput?.nextFocusDownId=card.id
+                searchButton?.nextFocusDownId=card.id
+                searchActions.forEach { it.nextFocusDownId=card.id }
+            }
+            return
+        }
+        // 从 GONE 恢复：高度按固定档写回去（页头收展动画会改这个 LayoutParams，
+        // 因此这里每次都重新写一遍，不能只改 visibility）。
+        scroll.layoutParams=(scroll.layoutParams as LinearLayout.LayoutParams).apply { height=dp(CHIP_ROW_HEIGHT) }
+        val chips=mutableListOf<View>()
+        items.forEach { label ->
+            val chip=ToggleChip(this,label,false,ButtonSize.COMPACT) {
+                // 点这一条：输入框里换成这个词，然后**搜索**它。
+                (searchInput as? EditText)?.setText(label)
+                runSearch(label)
+            }
+            chip.contentDescription="$label，搜索"
+            chips+=chip
+            gapInto(line,chip,lp(-2,-2))
+        }
+        // 左右在行内走（走到两端停在原地），向上回到输入框（它就在这一行正上方）。
+        wireChipRow(chips,{ searchInput })
+        // 向下进内容第一张卡；没有结果时停在原地，不会变成「按下没反应」。
+        val first=gridCards().firstOrNull()?.id
+        chips.forEach { it.nextFocusDownId=first ?: it.id }
+        // 导航栏里那几件（输入框 / 搜索 / 历史 / 手机输入）按下键先落进这一行
+        // （这一行就在它们正下方）。
+        val down=chips.first().id
+        searchInput?.nextFocusDownId=down
+        searchButton?.nextFocusDownId=down
+        searchActions.forEach { it.nextFocusDownId=down }
+        // 这一行是异步铺出来的，铺好的那一刻栅格可能还没建（那时只能指向自己）；
+        // 等这一帧布局跑完再补一次，把下键接到内容第一张卡上。
+        scroll.post {
+            if(suggestRow!==scroll || scroll.visibility!=View.VISIBLE) return@post
+            gridCards().firstOrNull()?.let { card -> chips.forEach { it.nextFocusDownId=card.id } }
+        }
+        suggestButtons.addAll(chips)
+        scroll.visibility=View.VISIBLE
+    }
     private fun runSearch(value: String) {
         val clean=value.trim(); if(clean.isEmpty() || clean.length>80) return
         (searchInput as? EditText)?.let { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(it.windowToken,0) }
@@ -3080,12 +3944,16 @@ class MainActivity: Activity() {
             "player" -> if(playbackMenu!=null || (hud.visibility==View.VISIBLE && !playError)) hidePlaybackOverlay() else returnToDetail()
             "detail" -> showCatalog()
             // 品牌不再是按钮，返回键就是唯一的「回主界面」入口：集合页回到它所在的标签（首页），
-            // 搜索 / 排行榜 / 设置直接切回首页，已经在首页时再按才弹退出确认。
+            // 搜索 / 排行榜 / 设置直接切回首页；已经在首页时再按就是**退出确认**。
+            //
+            // 首页那一下不再先把焦点搬到顶部入口：那一步只是把焦点挪到「搜索」图标上，用户读到的
+            // 是「按返回焦点乱跑」；页头收起时那一行的高度是 0，焦点请求根本没有可见的落点，
+            // 连下一次「焦点在入口上」的判断都成立不了——表现出来就是「按多少次返回都没反应、
+            // 也弹不出退出框」。因此首页的返回一律直接弹退出确认。
             else -> when {
                 collection!=null -> { collection=null; catalogFocus=""; showCatalog() }
                 tab!=TAB_HOME -> switchTab(TAB_HOME)
-                nav.any { it.hasFocus() } -> confirmExit()
-                else -> (navEntry() ?: nav.firstOrNull())?.requestFocus()
+                else -> confirmExit()
             }
         }
     }
@@ -3095,7 +3963,10 @@ class MainActivity: Activity() {
      * 取消后焦点回到首页入口，再按返回才会重新弹出。
      */
     private fun confirmExit() {
-        tvTools.confirm("退出红果TV","收藏与观看进度已经保存在本机，确定要退出吗？",navEntry() ?: nav.firstOrNull() ?: currentFocus) { finish() }
+        // 弹窗关掉之后焦点回到「按返回之前待着的地方」：优先当前焦点（内容里的卡片 / 芯片），
+        // 其次才退到顶部圆形入口。页头收起时那一行的可见高度是 0，不能拿它当落点。
+        val anchor=currentFocus?.takeIf { it.isAttachedToWindow } ?: navEntry() ?: nav.firstOrNull()
+        tvTools.confirm("退出红果TV","收藏与观看进度已经保存在本机，确定要退出吗？",anchor) { finish() }
     }
     @Deprecated("TV remote back is handled through the activity")
     override fun onBackPressed()=goBack()

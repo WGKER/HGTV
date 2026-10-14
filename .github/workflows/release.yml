@@ -1,9 +1,11 @@
 name: Release Android TV APK
 
-# 每次推送到 main：比较这次提交与上一次的 versionName / versionCode。
+# 每次推送到 main：把本次的 versionName / versionCode 与**上一次发布的 tag**比较
+# （不是「上一个提交」——中间夹了多少次不升版本的普通推送都不影响基线）。
 #   两个都**严格大于**基准 → 打包并发布 Release（tag = v<版本号>）
 #   两个都与基准相同      → 跳过，不打包（只改代码没升版本的普通推送）
 #   其余（只升一个 / 降了）→ 失败，提示版本必须同时增大
+# 基准取自 HEAD 上最近的 `v*` tag；一个都没有时回落到上一个提交。
 # 比对规则在 tools/compare-version.sh，本地可单独跑（用法见该脚本头部）。
 # 手动触发时可选 force=true，跳过比对直接发布当前版本（补发失败 Release 用）。
 on:
@@ -37,11 +39,11 @@ jobs:
       apk: ${{ steps.current.outputs.apk }}
       tag: ${{ steps.current.outputs.tag }}
       min_sdk: ${{ steps.current.outputs.min_sdk }}
-      notes: ${{ steps.diff.outputs.notes }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0            # 需要上一个提交来对比版本
+          fetch-depth: 0            # 需要完整历史来定位上一次发布的 tag
+          fetch-tags: true          # 基准取自发布 tag，必须把 tag 拉下来
 
       - name: 手动强制发布
         id: forced
@@ -75,20 +77,31 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # 上一次推送前的提交；新分支或手动触发时回落到 HEAD~1
-          previous=""
-          if [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
-             && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
-            previous="$BEFORE_SHA"
-          elif git rev-parse --verify -q HEAD~1 >/dev/null; then
-            previous="$(git rev-parse HEAD~1)"
+          # 基准 = **上一次发布的 tag**（HEAD 上最近的 `v*`），不是「上一个提交」：
+          # 版本是相对「上一个正式版」升的，跟中间夹了多少次不升版本的普通推送无关。
+          # 删除历史 tag 后基线会自然重算（例如只留 v1.0.0 时，下一次就是相对 v1.0.0 比）。
+          # 用 --tags 才认轻量 tag（本仓库的发布 tag 都是轻量的）。
+          # 不做「本次 tag 已存在就退到它父提交」的特殊处理：那种情况（补发同一版本）
+          # 走 workflow_dispatch 的 force=true；这里若退到父提交，反而会把基准挪到
+          # 更早的版本上，导致「已经发过的版本」被判成需要再发一次。
+          previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || true)"
+          if [ -z "$previous" ]; then
+            # 一个发布 tag 都没有：回落到「上一次推送前的提交」，再退到 HEAD~1。
+            if [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+               && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              previous="$BEFORE_SHA"
+              echo "没有发布 tag，回落到上一个提交作为基准。"
+            elif git rev-parse --verify -q HEAD~1 >/dev/null; then
+              previous="$(git rev-parse HEAD~1)"
+              echo "没有发布 tag，回落到 HEAD~1 作为基准。"
+            fi
           fi
           if [ -z "$previous" ]; then
             echo "没有可比对的历史（首次推送），视为版本已变动。"
             echo "changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "比对基准：$previous"
+          echo "比对基准：$previous（$(git describe --tags --always "$previous" 2>/dev/null || echo "$previous")）"
 
           # 这个文件在历史里换过位置（早期在 kotlin-tv/ 下），逐个候选路径找出来
           old_file=""
@@ -108,13 +121,6 @@ jobs:
           new_version="${{ steps.current.outputs.version }}"
           new_code="${{ steps.current.outputs.code }}"
           echo "基准版本：versionName=${old_version} versionCode=${old_code}"
-
-          # 发布说明用本次提交的信息（subject + body），客户端更新弹窗会显示它。
-          {
-            echo "notes<<HGTV_NOTES_EOF"
-            git log -1 --pretty=%B | sed '/^$/d' | head -20
-            echo "HGTV_NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
 
           # 只有两个都**严格大于**基准才发布；判定逻辑收在 tools/compare-version.sh，
           # 本地可单独跑同一份规则（避免 CI 与本地各写一套比较）。
@@ -192,9 +198,12 @@ jobs:
           MIN_SDK: ${{ needs.version.outputs.min_sdk }}
           TAG: ${{ needs.version.outputs.tag }}
           APK: ${{ needs.version.outputs.apk }}
-          NOTES: ${{ needs.version.outputs.notes }}
         run: |
           set -euo pipefail
+          # 客户端弹窗显示的文案与 Release 正文同源：都取自 docs/CHANGELOG.md 当前版本那一节，
+          # 只是 notes 用纯文字短版（剥掉 Markdown、长度封顶）。
+          NOTES="$(HGTV_VERSION="$VERSION" tools/release-notes.sh notes)"
+          export NOTES
           size="$(wc -c < "$APK" | tr -d ' ')"
           sha="$(sha256sum "$APK" | cut -d' ' -f1)"
           # update.json 是客户端「检查更新」读的唯一文件，字段与 AppUpdate.parse 一一对应。
@@ -240,20 +249,16 @@ jobs:
             update.json
 
       - name: 写发布说明
+        # 正文直接取自 docs/CHANGELOG.md 里当前版本那一节（`## <版本号>：...`），
+        # 不在这里另写一套模板：改了 CHANGELOG 就等于改了发布说明，两边不会再对不上。
+        # 找不到对应版本条目时该步骤失败，避免发出一份空说明。
         env:
-          VERSION: ${{ needs.version.outputs.version }}
-          CODE: ${{ needs.version.outputs.code }}
-          APK: ${{ needs.version.outputs.apk }}
+          HGTV_VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          {
-            echo "红果TV ${VERSION}（versionCode ${CODE}）"
-            echo
-            echo "安装包：\`$APK\`"
-            echo "校验：\`SHA256SUMS\`（\`sha256sum -c SHA256SUMS\`）"
-            echo
-            echo "最低 Android 8.0 / API 26，沿用同一发布签名，可覆盖安装并保留本机记录。"
-          } > RELEASE_NOTES.md
+          tools/release-notes.sh body > RELEASE_NOTES.md
+          echo "发布说明已生成（${{ needs.version.outputs.version }}）："
+          cat RELEASE_NOTES.md
 
       - name: 发布 Release
         env:

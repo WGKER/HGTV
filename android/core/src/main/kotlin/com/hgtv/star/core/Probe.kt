@@ -83,6 +83,35 @@ fun main(args: Array<String>) {
         }
         return
     }
+    if(args.contains("--suggest")) {
+        // 搜索提示词联调：一个关键词一次，验证条数、字段与「哪些条目能直接进详情」。
+        try {
+            val keyword=keywordArg() ?: "仙"
+            val rows=repository.suggestions(keyword,20)
+            println("suggest=$keyword 条数=${rows.size}")
+            rows.forEach { row -> println("   ${if(row.series!=null) "剧集 ${row.series.id}" else "查询词"} | ${row.name}") }
+            check(rows.size<=20)
+            // 空关键词不该发请求（服务端会 500），这里直接返回空表。
+            check(repository.suggestions("   ").isEmpty())
+        } finally {
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
+    if(args.contains("--hot")) {
+        // 热搜词联调：种子词各问一次联想接口，收集「不是某一部剧」的那些词。
+        try {
+            val started=System.currentTimeMillis()
+            val words=repository.hotSearches(12)
+            println("hot 共 ${words.size} 条，${System.currentTimeMillis()-started}ms")
+            words.forEach { println("   $it") }
+            check(words.size<=12)
+            check(words.distinct().size==words.size)
+        } finally {
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
     if(args.contains("--related")) {
         // 相关短剧联调：默认取短剧首页第一部，也可以直接给剧集 ID。
         try {

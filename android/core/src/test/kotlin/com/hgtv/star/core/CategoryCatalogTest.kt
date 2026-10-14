@@ -7,14 +7,15 @@ import org.junit.Test
 class CategoryCatalogTest {
     /** 分类页的三个大类与官网三本目录一一对应。 */
     @Test fun `three groups map to the three site catalogs`() {
-        assertEquals(listOf("漫剧","真人剧","AI剧"),CategoryCatalog.groups.map { it.label })
+        // 大类名与榜单页那四枚芯片同一套写法（漫剧 / 短剧 / 真人 / AI）。
+        assertEquals(listOf("漫剧","真人","AI剧"),CategoryCatalog.groups.map { it.label })
         assertEquals(listOf("comic-drama","real-drama","ai-drama"),CategoryCatalog.groups.map { it.path })
     }
 
     /**
      * 每个大类下面的小类：第一个固定是「全部」（路径就是大类本身），
      * 之后是官网标签行里的那些子类，路径是 `大类/子类`。数量按官网实测钉住
-     * （漫剧 8、真人剧 24、AI剧 8，加上「全部」）。
+     * （漫剧 8、真人 24、AI剧 8，加上「全部」）。
      */
     @Test fun `each group lists all plus its own sub tags`() {
         CategoryCatalog.groups.forEach { group ->
@@ -52,7 +53,7 @@ class CategoryCatalogTest {
         assertEquals("comic-drama",CategoryCatalog.defaultTag.path)
         assertEquals("漫剧 · 全部",CategoryCatalog.describe("comic-drama"))
         assertEquals("漫剧 · 玄幻",CategoryCatalog.describe("comic-drama/fantasy"))
-        assertEquals("真人剧 · 动作冒险",CategoryCatalog.describe("real-drama/action-adventure"))
+        assertEquals("真人 · 动作冒险",CategoryCatalog.describe("real-drama/action-adventure"))
         assertEquals("AI剧 · 末世",CategoryCatalog.describe("ai-drama/apocalypse"))
         assertEquals(CategoryCatalog.groups[1],CategoryCatalog.groupOf("real-drama/variety"))
         assertNull(CategoryCatalog.groupOf("unknown"))

@@ -12,8 +12,14 @@ import org.junit.Test
 import java.io.IOException
 
 class ContentRepositoryTest {
-    /** 一条可用的 `video_model`（含 `fallback_api`）；播放接口只负责给出这个地址。 */
+    /**
+     * 新路由 `/novel/player/video_model/v1/` 的响应：`video_model` 直接挂在 `data` 下
+     * （带场景段与旧路径挂在 `data[<vid>]` 下，见 [legacyVideoModel]）。
+     */
     private fun videoModel(fallback: String) =
+        """{"BaseResp":{"StatusCode":0},"code":0,"data":{"video_model":"{\"fallback_api\":\"$fallback\"}"}}"""
+    /** 带场景段 / 旧路径的响应形态：`data[<vid>].video_model`。 */
+    private fun legacyVideoModel(fallback: String) =
         """{"BaseResp":{"StatusCode":0},"code":0,"data":{"123":{"video_model":"{\"fallback_api\":\"$fallback\"}"}}}"""
     /** `fallback_api` 地址上的清晰度列表（`video_list` 为空时 stream 会报「没有电视可播放的清晰度」）。 */
     private fun fallbackList(vararg rows: Pair<String,String>) = JSONObject()
@@ -23,33 +29,100 @@ class ContentRepositoryTest {
         .toString()
 
     /**
-     * 平台把播放接口改成了带场景段的形式（`/novel/player/multi_video_model/:dr_scene/v1/`）：
-     * 不带场景段的旧路径现在一律返回 `Code 110001 未知异常`，表现出来就是「所有影片都放不了」。
-     * 这里钉住三件事：先试带场景段的路径、旧路径只在带场景段全失败时才用、业务码非 0 不算成功。
+     * 平台 2026-10-14 又把播放接口换了一条：原先带场景段的
+     * `/novel/player/multi_video_model/:dr_scene/v1/` 现在一律返回 **HTTP 200 + 空响应体**，
+     * 旧路径返回 `Code 110001 未知异常`；能用的只有 `/novel/player/video_model/v1/`，
+     * 且要 `video_id` 单值。这里钉住四件事：新路由排在最前、空响应体必须当失败、
+     * 新路由不通时依次退到带场景段与旧路径、全失败时如实报错。
      */
-    @Test fun playbackPrefersTheSceneSegmentRouteAndIgnoresBusinessErrors() {
+    @Test fun playbackPrefersTheVideoIdRouteAndIgnoresBusinessErrors() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             if(request.url.host!="example.com") paths+=request.url.encodedPath
             when {
                 request.url.host=="example.com" -> fallbackList("h264" to "https://example.com/stream")
-                request.url.encodedPath=="/novel/player/multi_video_model/default/v1/" -> videoModel("https://example.com/stream")
+                request.url.encodedPath=="/novel/player/video_model/v1/" -> videoModel("https://example.com/stream")
                 else -> """{"Code":110001,"Message":"未知异常"}"""
             }
         }
         val stream=repo.stream("123")
         assertEquals("https://example.com/stream",stream.url)
-        assertEquals(listOf("/novel/player/multi_video_model/default/v1/"),paths)
+        assertEquals(listOf("/novel/player/video_model/v1/"),paths)
     }
 
-    /** 带场景段的路径不可用时退回旧路径：老账号 / 灰度环境上仍然要能播。 */
-    @Test fun playbackFallsBackToTheLegacyRouteWhenTheSceneRouteFails() {
+    /**
+     * 新路由的请求体必须是 `video_id` 单值：给它 `mixed_video_id_map` 会返回
+     * `100001 video_id invalid`，所以两条路的 body 形态不能混用。
+     */
+    @Test fun videoIdRouteSendsTheSingleVideoIdBodyInsteadOfTheLegacyMap() {
+        val requests=mutableListOf<Request>()
+        val repo=repository { request ->
+            if(request.url.host!="example.com") requests+=request
+            when {
+                request.url.host=="example.com" -> fallbackList("h264" to "https://example.com/stream")
+                request.url.encodedPath=="/novel/player/video_model/v1/" -> videoModel("https://example.com/stream")
+                else -> ""
+            }
+        }
+        assertEquals("https://example.com/stream",repo.stream("123").url)
+        val sent=requests.single()
+        assertEquals("/novel/player/video_model/v1/",sent.url.encodedPath)
+        val body=sent.body?.let { payload -> okio.Buffer().also { buffer -> payload.writeTo(buffer) }.readUtf8() } ?: ""
+        assertTrue(body,body.contains("\"video_id\":\"123\""))
+        assertFalse(body,body.contains("mixed_video_id_map"))
+    }
+
+    /**
+     * 网关在业务处理前挡掉请求时是 `HTTP 200 + 0 字节`：这时业务码取不到、默认成 0，
+     * 不判空就会被当成成功往下走，用户看到的是「播放接口暂不可用」但错误信息是 `（0）`。
+     */
+    @Test fun blankResponseBodyCountsAsFailureAndMovesToTheNextRoute() {
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
+            if(request.url.host!="example.com") paths+=request.url.encodedPath
+            when {
+                request.url.host=="example.com" -> fallbackList("h264" to "https://example.com/stream")
+                request.url.encodedPath=="/novel/player/video_model/v1/" -> ""
+                request.url.encodedPath=="/novel/player/multi_video_model/preload/v1/" -> legacyVideoModel("https://example.com/stream")
+                else -> """{"Code":110001,"Message":"未知异常"}"""
+            }
+        }
+        assertEquals("https://example.com/stream",repo.stream("123").url)
+        assertEquals(listOf(
+            "/novel/player/video_model/v1/",
+            "/novel/player/multi_video_model/preload/v1/"
+        ),paths)
+    }
+
+    /** 新路由通了但没给 `video_model`（例如只有 `data.disable_vsr` 这类字段）时也要继续换路。 */
+    @Test fun responseWithoutVideoModelMovesToTheNextRoute() {
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
+            if(request.url.host!="example.com") paths+=request.url.encodedPath
+            when {
+                request.url.host=="example.com" -> fallbackList("h264" to "https://example.com/stream")
+                request.url.encodedPath=="/novel/player/video_model/v1/" -> """{"code":0,"data":{"disable_vsr":true}}"""
+                request.url.encodedPath=="/novel/player/multi_video_model/detail/v1/" -> legacyVideoModel("https://example.com/stream")
+                else -> ""
+            }
+        }
+        assertEquals("https://example.com/stream",repo.stream("123").url)
+        assertEquals(listOf(
+            "/novel/player/video_model/v1/",
+            "/novel/player/multi_video_model/preload/v1/",
+            "/novel/player/multi_video_model/default/v1/",
+            "/novel/player/multi_video_model/detail/v1/"
+        ),paths)
+    }
+
+    /** 新路由不可用时退回旧路径：老账号 / 灰度环境上仍然要能播。 */
+    @Test fun playbackFallsBackToTheLegacyRouteWhenTheNewRouteFails() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             if(request.url.host!="example.com") paths+=request.url.encodedPath
             when {
                 request.url.host=="example.com" -> fallbackList("h264" to "https://example.com/legacy")
-                request.url.encodedPath=="/novel/player/multi_video_model/v1/" -> videoModel("https://example.com/legacy")
+                request.url.encodedPath=="/novel/player/multi_video_model/v1/" -> legacyVideoModel("https://example.com/legacy")
                 else -> """{"Code":110001,"Message":"未知异常"}"""
             }
         }
@@ -57,9 +130,15 @@ class ContentRepositoryTest {
         assertEquals("/novel/player/multi_video_model/v1/",paths.last())
     }
 
-    /** 三条路都只有业务错误码时必须如实报错，不能把空 data 当成成功往下走。 */
+    /** 五条路都只有业务错误码或空响应时必须如实报错，不能把空 data 当成成功往下走。 */
     @Test fun playbackReportsFailureWhenEveryRouteAnswersWithABusinessError() {
         val repo=repository { """{"Code":110001,"Message":"未知异常","BaseResp":{"StatusCode":110001}}""" }
+        assertThrows(IOException::class.java) { repo.stream("123") }
+    }
+
+    /** 五条路全是空响应体（当前平台对带场景段那几条的实际行为）时也要报错，而不是往下走。 */
+    @Test fun playbackReportsFailureWhenEveryRouteAnswersWithAnEmptyBody() {
+        val repo=repository { "" }
         assertThrows(IOException::class.java) { repo.stream("123") }
     }
 

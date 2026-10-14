@@ -176,13 +176,6 @@ class Library(context: Context) {
     var searchToken: String
         get() = sessionPrefs.getString("x-tt-token", "").orEmpty()
         set(value) { sessionPrefs.edit().putString("x-tt-token", value.trim()).apply() }
-    /**
-     * 分类页当前选中的小类（`CategoryCatalog` 里的路径）。只影响分类页的默认选择，
-     * 不参与备份与恢复（和播放偏好不同，它是一处浏览位置）。
-     */
-    var categoryPath: String
-        get() = prefs.getString("category-path", "").orEmpty()
-        set(value) { prefs.edit().putString("category-path", value.trim()).apply() }
     var autoNext: Boolean
         get() = state().settings.autoNext
         set(value) { if (value != autoNext) { state().settings = state().settings.copy(autoNext = value); put("autoNext", value) } }

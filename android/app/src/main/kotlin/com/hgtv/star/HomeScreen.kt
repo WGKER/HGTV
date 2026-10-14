@@ -498,7 +498,8 @@ class HomeScreen(
 
     private fun posterCard(key: String, height: Int, entry: Entry): Card {
         val poster = PosterCard(context, height, loadCover)
-        poster.bind(entry.series, entry.label, badgeFor(entry), entry.progress, false)
+        // 紧凑模式（详情页「相关剧集」）不标右上角季号：那一条剧架的右下角已经在写季号了。
+        poster.bind(entry.series, entry.label, badgeFor(entry), entry.progress, false, seasonBadge = !compact)
         return Card(key, poster, entry).apply {
             this.poster = poster
             image = poster.image

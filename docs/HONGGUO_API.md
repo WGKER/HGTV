@@ -29,7 +29,7 @@
 | App 接口（主） | `https://api5-normal-sinfonlinea.fqnovel.com` |
 | App 接口（备用） | `https://api5-normal-sinfonlinec.fqnovel.com`、`https://api5-normal-sinfonlineb.fqnovel.com` |
 | App 接口（备用） | `https://api5-normal-lf.fqnovel.com`、`https://api5-normal-lq.fqnovel.com`、`https://api5-normal-hl.fqnovel.com` |
-| 播放地址解析 | `https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/` |
+| 播放地址解析 | `https://api5-normal-sinfonlineb.fqnovel.com/novel/player/video_model/v1/`（2026-10-14 起；旧路径见 4.3） |
 | 弹幕 | 上述六条线路，按 `sinfonlinea → c → b → lf → lq → hl` 顺序失败转移 |
 | 视频 CDN | 由播放接口返回的 `fallback_api` 给出，域名随资源与调度变化，不要写死 |
 
@@ -312,6 +312,70 @@ route-key：`search_(keyword)/page`（部分响应是 `search_page`）。
 一次只给相关度最高的约 10 条，`totalCount` 却显示 200 左右。所以它只负责第 1 页：
 App 搜索接口对匿名设备返回空响应时，客户端退回到这里取第 1 页，第 2 页起改用片库目录（3.3）。
 
+### 3.5.1 搜索提示词（联想词）
+
+官网 PC 端搜索框的下拉建议用的就是它（前端 chunk `gp.js` 里的 `/incent_resource/suggestion`）：
+
+```
+GET https://hongguoduanju.com/incent_resource/suggestion?app_id=8662&web_id={随机 UUID}&query={关键词}&count=10
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `app_id` | **必填**，固定 `8662`（红果短剧在番茄系的 aid）。缺了它服务端返回 **500** |
+| `query` | 关键词；**空值返回 500**，因此调用前先判空 |
+| `count` | 条数，有效上限 **20**（传 100 也只回 20），不传按 10 |
+| `web_id` | 官网每次页面加载生成的随机标识。**可省**，服务端不校验它与会话的对应关系 |
+
+**不需要签名、不需要登录态**（与 App 搜索接口不同，匿名设备也能拿到数据），实测延迟约 70ms。
+
+```json
+{ "suggest_list": [
+  { "display_words": [ "聚宝仙盆之杂灵根才是真BOSS" ],
+    "keyword": "7615465407347952664",
+    "name": "聚宝仙盆之杂灵根才是真BOSS",
+    "word_type": "short_play_name",
+    "video_data": { "series_id": 7615465407347952664, "series_title": "……",
+                    "series_cover": "……", "series_intro": "……", "episode_cnt": 99,
+                    "episode_right_text": "全99集",
+                    "hot_score_data": { "score": 46855999, "text": "4685万热度" },
+                    "category_list": [ { "category_id": 7, "name": "玄幻" } ],
+                    "vid_list": [ "……" ] } }
+] }
+```
+
+- `name`（兜底 `display_words[0]`）就是提示词本身；
+- `video_data` **与卡片是同一套字段**，可直接复用卡片解析（见 4.1）；
+- `word_type` 实测见过六种：`short_play_name`（剧名，**带完整 `video_data`**）、`title`、
+  `common_query`、`album`、`short_play_category`、`short_play_kol_user`——
+  后五种 `video_data` 是空对象 `{}`，只能当**查询词**用；
+- 客户端据此分两类：`video_data.series_id` 有值 → 点这条直接进详情；
+  否则 → 点这条拿 `name` 去搜。
+
+#### 3.5.1.1 热搜词（没有专门接口，用联想词合成）
+
+平台**没有**热搜榜接口（`/incent_resource/hot_word`、`/incent_resource/hot_search`、
+`/incent_resource/keyword`、`/incent_resource/search_word` 实测全是 **404**），
+`/query` 页面也是 **410 Gone**。但 3.5.1 的联想词接口本身就是「按热度排的候选」：
+拿几个题材词当种子各问一次，把返回里**不是某一部剧**的那些（`video_data` 是空对象）收集起来
+去重，就是一份现成的热词表。
+
+客户端的做法（`ContentRepository.hotSearches`）：
+
+1. 种子词 `短剧 / 都市 / 逆袭 / 甜宠 / 战神` **并发**各问一次（串行五个要 1.8s，并发约 0.3~0.8s）；
+2. 丢掉「是某部剧」的那些（`series_id` 有值）与过长过短的词，按 `word_type` 分层：
+   `short_play_category` / `category`（题材）> `common_query`（平台自己的搜索建议）> `title` / `album`；
+3. 同层内**按种子轮询**交替取：一个种子单独就能填满整张表，顺着一个种子取的话
+   整排热搜词都是同一个题材的变体（实测 `短剧` 一个种子回的全是「…短剧」）；
+4. 全部种子都失败时退回一张写死的兜底表（搜索页不能因为一个提示接口而空着）。
+
+实测 `hotSearches(12)` 约 0.8s 返回：`都市日常 / 逆袭翻身 / 甜宠 / 战神归来 / 都市爱情 / 逆袭 /
+都市 / 都市修仙 / 青春甜宠 / 战神赘婿 / 30集短剧 / 都市旺业`。
+
+> 相关但**不可用**的路径：`/incent_resource/selector`（分类页的筛选器）、
+> `/incent_resource/kep/query`（需要 `keyword_hash`）、`/query` 页面（返回 **410 Gone**）。
+> 这三条本工程未采用。
+
 ### 3.6 榜单
 
 ```
@@ -446,22 +510,24 @@ query 除设备参数（**App 版本 7.2.2.32**）外：
 
 ### 4.3 播放地址解析
 
+**平台在 2026-10-14 换了一次接口，而且是路径与请求体一起换。**当前可用的是：
+
 ```
-POST https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/?<device + ts + _rticket>
+POST https://api5-normal-sinfonlineb.fqnovel.com/novel/player/video_model/v1/?<device + ts + _rticket>
 Content-Type: application/json; charset=UTF-8
 x-ss-stub: <body 的 MD5，大写>
 ```
 
-body（`id` = 分集 ID，也就是 `vid_list` 里的一项）：
+body（`video_id` = 分集 ID，也就是 `vid_list` 里的一项，**单值字符串**）：
 
 ```json
 {
+  "video_id": "7615470177953532991",
   "biz_param": {
     "detail_page_version": 0, "device_level": 3, "disable_digg_stat": false,
     "need_all_video_definition": true, "need_mp4_align": false,
     "use_os_player": false, "use_server_dns": false, "video_platform": 1024
-  },
-  "mixed_video_id_map": { "1004": ["7615470177953532991"] }
+  }
 }
 ```
 
@@ -469,18 +535,28 @@ body（`id` = 分集 ID，也就是 `vid_list` 里的一项）：
 
 ```json
 {
-  "Code": 0,
+  "code": 0,
   "data": {
-    "7615470177953532991": {
-      "video_model": { "fallback_api": { "fallback_api": "https://……" } }
-    }
+    "disable_vsr": true,
+    "expire_time": 1791978756,
+    "video_width": 1254,
+    "video_height": 720,
+    "video_model": "{\"status\":10,\"video_list\":[……],\"fallback_api\":{……}}"
   }
 }
 ```
 
-- `video_model` 可能是对象，也可能是**字符串化的 JSON**，两种都要处理；
-- `fallback_api` 可能是对象（取 `.fallback_api`）、数组（取 `[0]`）或字符串（再解析一层）；
-- 拿到 `fallback_api` 后**再发一次普通 GET**（同样用播放器 UA，不需要签名）：
+- **请求体形态不能混用**：这条路由只认 `video_id` 单值。给 `mixed_video_id_map`、`vid`、
+  `video_ids`、`item_id` 一律返回 `100001 invalid param`（`debug_info` 是 `video_id invalid`），
+  给数组则返回 `400 InvalidRequest`；
+- `biz_param` 可以省略（返回 1 档清晰度），带上才拿到完整 5 档；字段与旧路径完全一致；
+- **必须签名**：裸 POST 或只带设备 query（没有 `x-gorgon` / `x-medusa` / `x-helios` 等签名头）
+  返回 `code -1`；签名后才是 `code 0`；
+- 六条线路（a/b/c/lf/lq/hl）表现一致；
+- `video_model` 是**字符串化的 JSON**，要再解析一层；`video_list` 是**数组**（旧路径是对象），
+  元素里是 `video_meta`（`vwidth`/`vheight`/`bitrate`/`size`）、`gear_des_key`（`…|4:720p|…`）、
+  `encrypt_info.spade_a`（`cenc-aes-ctr`）、`main_url` / `backup_url`；
+- 拿到 `video_model.fallback_api` 后**再发一次普通 GET**（播放器 UA，不需要签名）：
 
 ```json
 {
@@ -501,6 +577,9 @@ body（`id` = 分集 ID，也就是 `vid_list` 里的一项）：
 }
 ```
 
+- `fallback_api` 可能是对象（取 `.fallback_api`）、数组（取 `[0]`）或字符串（再解析一层）；
+- 这一跳的 `video_list` 是**对象**，键名是 `video_1`…`video_5`，清晰度看
+  `quality_desc` / `height` / `vheight` / `quality`，或由 key 兜底；
 - `key_seed` 非空时用 `main_url` 走 `MediaCrypto.decryptUrl`（见 5.1）；
 - `spade_a` 非空时用 `MediaCrypto.deriveKey` 得到 16 字节内容密钥（CENC 解密用）；
 - **跳过 `codec_type` 为 `bytevc2` / `bvc2` 的资源**：这类资源在 Android 的 MP4 解析器里
@@ -509,6 +588,21 @@ body（`id` = 分集 ID，也就是 `vid_list` 里的一项）：
   支持 `2160/1440/1080/720/576/540/480/360`，以及 `1920→1080`、`1280→720`、
   `1024→576`、`854→480`、`640→360`；按数值降序取第一个 ≤ 请求上限的，
   都不满足时取最低的一档并在画面上标注「兼容资源」。
+
+#### 4.3.1 旧路径的现状（保留兜底）
+
+| 路径 | 2026-10-14 实测 | 说明 |
+| --- | --- | --- |
+| `POST /novel/player/video_model/v1/` | `code 0` + 完整 `video_model` | **当前可用**，`video_id` 单值 body |
+| `POST /novel/player/multi_video_model/preload/v1/` | HTTP 200 + **0 字节** | 0.15.0 起的第一候选，已失效 |
+| `POST /novel/player/multi_video_model/default/v1/` | HTTP 200 + **0 字节** | 同上 |
+| `POST /novel/player/multi_video_model/detail/v1/` | HTTP 200 + **0 字节** | 同上 |
+| `POST /novel/player/multi_video_model/v1/` | `Code 110001 未知异常` | 更早的旧路径 |
+| `POST /novel/player/multi_video_detail/preload/v1` | `code 0` + 分集列表 | 分集列表接口，仍然正常 |
+
+> **空响应体必须当失败处理。** 网关在业务处理前挡掉请求时就是 `HTTP 200 + 0 字节`，
+> 这时业务码取不到、默认成 0，不判空就会被当成成功往下走——0.15.0 与 2026-10-14 两次
+> 「所有影片都放不了」都是这个坑的不同变体。实现里按「响应体为空 → 换下一条」处理。
 
 ### 4.4 弹幕（评论接口）
 
@@ -657,9 +751,12 @@ key    = hex( ascii(work[1:33]) )        # 32 个十六进制字符 -> 16 字节
         └─ 第 2 页起带上一页的 search_id / passback / next_offset（游标缺省即回到第 1 页重搜）
         └─ 空响应体（匿名设备）/ 失败 -> GET /search/{kw}?page=1            （第 1 页）
                                       -> GET /category/{comic|real}-drama?page=N 往后扫（第 2 页起）
+提示词：GET /incent_resource/suggestion?app_id=8662&query={kw}&count=10   （免签名、免登录）
+        └─ 热搜词没有专门接口：并发问几个题材种子词，取「不是某部剧」的那些词（见 3.5.1.1）
 详情：GET /detail?series_id={id}                 -> seriesDetail + vid_list[]
       └─ 同一份 HTML 的 mergeLoaderData 参数      -> recommendationGroups.related_list[]（相关短剧）
-播放：POST /novel/player/multi_video_model/v1/   -> fallback_api
+播放：POST /novel/player/video_model/v1/          -> video_model.fallback_api（body 用 video_id 单值）
+      └─ 兜底顺序：video_model → multi_video_model/{preload,default,detail}/ → multi_video_model/
       GET  {fallback_api}                        -> video_list + key_seed/spade_a
       GET  {main_url} Range: bytes=0-262143      -> 206 + moov -> 样本解密 -> 播放器
 弹幕：POST /novel/commentapi/comment/list/{vid}/v1/  -> 30 秒窗口循环
@@ -668,8 +765,10 @@ key    = hex( ascii(work[1:33]) )        # 32 个十六进制字符 -> 16 字节
 本地联调入口（本工程）：
 
 ```bash
-# 榜单 / 搜索 / 弹幕 三条探针
+# 榜单 / 搜索 / 提示词 / 热搜词 / 弹幕 五条探针
 ./android/gradlew -p android --offline :core:run --args="--ranking"
+./android/gradlew -p android --offline :core:run --args="--suggest 仙"
+./android/gradlew -p android --offline :core:run --args="--hot"
 ./android/gradlew -p android --offline :core:run --args="--search 聚宝 --short"
 # 搜索探针带登录态（不带 token 时匿名请求会退回官网搜索 + 片库目录）
 ./android/gradlew -p android --offline :core:run --args="--search 聚宝 --short --token <x-tt-token>"
@@ -687,6 +786,7 @@ key    = hex( ascii(work[1:33]) )        # 32 个十六进制字符 -> 16 字节
 | --- | --- |
 | App 搜索返回 HTTP 200 空 body | 平台对匿名设备关闭；必须判空后回退官网搜索，否则异常会打断兜底（配置 `x-tt-token` / `HONGGUO_SESSION_TOKEN` 后该接口可用） |
 | 官网搜索只有约 10 条、翻页无效 | 服务端忽略所有分页参数；App 搜索不可用时第 2 页起改用片库目录扫描 |
+| 提示词接口 500 | `app_id` 缺失或不是 `8662`；`query` 为空也会 500（两条都是实测） |
 | 漫剧搜索报 `A JSONObject text must begin with '{'` | 空 body 直接进 JSON 解析器；先判空即可 |
 | 弹幕条数远少于平台自报 | 匿名设备只下发采样热弹幕，与参数无关 |
 | 弹幕请求偶发风控 | 窗口之间留 180ms；六条线路轮询 |
@@ -694,6 +794,8 @@ key    = hex( ascii(work[1:33]) )        # 32 个十六进制字符 -> 16 字节
 | 播放返回 200 而非 206 | CDN 不支持分段；必须按分段协议处理，否则解密与 seek 都不成立 |
 | 抓包拿不到有效数据 | App 有证书校验 + QUIC；需系统 CA + Frida 解 pinning，或直接挂钩 `SSL_write`/`SSL_read`，并注意响应是 brotli |
 | 签名请求被拒 | `_rticket` 必须落在 `branch == 0` 的分支上（本实现只发这一支） |
+| 播放接口 `HTTP 200 + 0 字节` | 网关在业务处理前挡掉了请求（路径 / 请求体形态已变）；**必须先判空再解析**，否则业务码会默认成 0、被当成成功 |
+| 播放接口 `100001 video_id invalid` | 新路由 `/novel/player/video_model/v1/` 要 `video_id` 单值，给 `mixed_video_id_map` / `vid` / `video_ids` / 数组都不行 |
 
 ---
 
@@ -705,7 +807,9 @@ key    = hex( ascii(work[1:33]) )        # 32 个十六进制字符 -> 16 字节
 | --- | --- | --- |
 | 分集详情 | `POST /novel/player/multi_video_detail/v1/` | 与 `vid_list` 同源信息 |
 | 分集详情（预加载） | `POST /novel/player/multi_video_detail/preload/v1` | `zhenyong97/hongguo-downloader` |
-| 视频模型（预加载） | `POST /novel/player/multi_video_model/preload/v1` | 同上 |
+| 视频模型（新） | `POST /novel/player/video_model/v1/` | **已采用**：播放地址解析的第一候选，body 用 `video_id` 单值（见 `ContentRepository.videoModel`） |
+| 视频模型（预加载） | `POST /novel/player/multi_video_model/preload/v1` | 已失效（200 + 0 字节），保留为兜底 |
+| 视频模型（场景段） | `POST /novel/player/multi_video_model/{default,detail}/v1/` | 已失效（200 + 0 字节），保留为兜底 |
 | 分享链接转剧集 ID | — | 由分享页 HTML 提取，本工程未实现 |
 
 ## 9. 来源与许可

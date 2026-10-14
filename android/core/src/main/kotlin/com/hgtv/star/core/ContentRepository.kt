@@ -30,6 +30,20 @@ data class RelatedWorks(
     /** 其中属于**同一部剧**的那些季（按季号升序，含正在看的这一季）：界面据此标注「第 N 季」。 */
     val seasons: List<Series>
 )
+/**
+ * 一条搜索提示词（联想词）。
+ *
+ * [series] 非空表示这条提示词**本身就是一部剧**（服务端给了 `video_data.series_id`）：
+ * 点它可以跳过搜索直接进详情；为空时它只是一个查询词（`common_query` / `title` / `album` /
+ * 分类这类），点它就拿 [name] 去搜。
+ */
+data class SearchSuggestion(
+    val name: String,
+    val series: Series? = null,
+    /** 服务端的 `word_type`：`short_play_name` / `title` / `common_query` / `album` / `category` 等。 */
+    val wordType: String = ""
+)
+
 data class RankPosition(val rank: Int?, val heat: String)
 data class ComicRanking(val positions: Map<String,RankPosition>, val totalPages: Int, val updatedText: String)
 data class CatalogPage(val items: List<Series>, val hasMore: Boolean, val ranking: ComicRanking? = null)
@@ -39,6 +53,42 @@ class SearchSessionExpiredException: IOException("搜索结果已过期，请从
 class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
     private val signer = Signer()
     private val site = "https://hongguoduanju.com"
+    /**
+     * 提示词接口要求的应用号（缺了它服务端返回 500）。
+     * 8662 就是「红果短剧」在番茄系里的 aid（与 [VendorConstants.device] 里的 `aid` 同值）。
+     */
+    private val SUGGEST_APP_ID = "8662"
+    /**
+     * 提示词接口的 `web_id`：官网上是每次页面加载生成的一个随机标识。
+     * 这里整个进程生成一次即可（服务端并不校验它与会话的对应关系）。
+     */
+    private val webId = java.util.UUID.randomUUID().toString()
+    /**
+     * 热搜词的种子词（见 [hotSearches]）：都是题材向的泛词，联想接口对它们返回的候选里
+     * 混着一批真正的查询词（`30集短剧` / `都市逆袭` / `甜宠` 这类）。
+     * 只取前三个：每个种子一次请求，串行约 200ms，再多就只是把同一批词换几个说法。
+     */
+    private val SUGGEST_SEEDS = listOf("短剧","都市","逆袭","甜宠","战神")
+    /**
+     * 热搜词的词类型优先级（见 [hotSearches]）。
+     *
+     * 题材 / 分类这类（`short_play_category` / `category`）读起来最像「大家在搜的题材」，
+     * 排最前；`common_query` 是平台自己的搜索建议（`短剧最热榜前十名` 这种）排其次；
+     * `title` / `album` 更像是书名 / 专辑名，放最后。
+     */
+    private val HOT_WORD_ORDER = listOf("short_play_category","category","common_query","title","album")
+    /**
+     * 热搜词的并发池：种子词彼此独立，串行五个要 1.8s，并发之后是单次请求的时间。
+     * 池子很小且只在取热搜词时用一下，因此按需创建、线程是守护线程（不挡进程退出）。
+     */
+    private val SUGGEST_POOL = java.util.concurrent.Executors.newFixedThreadPool(SUGGEST_SEEDS.size) { runnable ->
+        Thread(runnable,"hgtv-hotword").apply { isDaemon=true }
+    }
+    /** 热搜词的兜底表：提示接口整体不可用时用（搜索页不能空着）。 */
+    private val FALLBACK_HOT = listOf(
+        "短剧最热榜前十名","AI短剧","都市逆袭","甜宠","战神归来","穿越剧大全",
+        "萌宝助攻","玄幻修仙系列","悬疑","古装","逆袭人生","豪门"
+    )
     private data class DanmakuPage(val items: List<Danmaku>,val nextStart: Long,val cursor: String,val hasMore: Boolean,
                                    val raw: List<org.json.JSONObject> = emptyList())
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
@@ -197,6 +247,77 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
      * 按剧集 ID 去重；接口对匿名设备不可用时退回官网搜索（本身就不分类型），
      * 第 2 页起从**两本片库目录**（`comic-drama` 与 `real-drama`）里扫。
      */
+    /**
+     * 搜索提示词（联想词）：官网 PC 端搜索框用的就是这个接口
+     * （前端 chunk 里的 `/incent_resource/suggestion`，见 docs/HONGGUO_API.md 3.5.1）。
+     *
+     * ```
+     * GET https://hongguoduanju.com/incent_resource/suggestion?app_id=8662&web_id={随机 UUID}&query={关键词}&count=10
+     * ```
+     *
+     * **不需要签名、不需要登录态**，只要求 `app_id=8662`（缺了它服务端返回 500）；`web_id` 可省。
+     * `count` 有效上限 20（超过按 20 算），不传按 10；空关键词返回 500，因此调用前先判空。
+     *
+     * 响应里每条的 `video_data` 与卡片是同一套字段（`series_id` / `series_title` /
+     * `series_cover` / `series_intro` / `episode_cnt` / `category_list`），因此直接复用 [card] 解析。
+     * `word_type` 实测见过 `short_play_name`（剧名，带完整 `video_data`）、`title`、`common_query`、
+     * `album`、`short_play_category`、`short_play_kol_user`——后几种的 `video_data` 是空对象，
+     * 只能当查询词用。
+     */
+    fun suggestions(keyword: String, count: Int = 10): List<SearchSuggestion> {
+        val clean=keyword.trim()
+        if(clean.isEmpty()) return emptyList()
+        val wanted=count.coerceIn(1,20)
+        val url="$site/incent_resource/suggestion?app_id=$SUGGEST_APP_ID&web_id=$webId" +
+            "&query=${Signer.encode(clean)}&count=$wanted"
+        val rows=JSONObject(text(url)).optJSONArray("suggest_list")?.objects() ?: return emptyList()
+        return rows.mapNotNull { row ->
+            val name=row.str("name").ifEmpty { row.optJSONArray("display_words")?.optString(0).orEmpty() }.trim()
+            if(name.isEmpty()) return@mapNotNull null
+            // video_data 为空对象（title / common_query 这类）时不算剧集，只能当查询词。
+            val video=row.optJSONObject("video_data")?.takeIf { it.length()>0 }
+            val series=video?.let { card(it) }?.takeIf { it.id.matches(Regex("[0-9]{1,30}")) }
+            SearchSuggestion(name,series,row.str("word_type"))
+        }.distinctBy { it.name }.take(wanted)
+    }
+    /**
+     * 热搜词：搜索页空输入时铺在下面那一排。
+     *
+     * 平台**没有**热搜榜接口（`/incent_resource/hot_word`、`/incent_resource/hot_search` 等都是 404），
+     * 但 [suggestions] 这个联想词接口本身就是「按热度排的候选」：拿几个题材词当种子各问一次，
+     * 把返回里**不是某一部剧**的那些（`title` / `common_query` / `short_play_category` / `category` /
+     * `album`——`video_data` 是空对象）收集起来去重，就是一份现成的热词表。
+     *
+     * 只取种子词里靠前的若干条：联想词是按相关度排的，越靠前越像「大家在搜的」。
+     * 全部种子词都失败时退回 [FALLBACK_HOT]：搜索页不能因为一个提示接口而空着。
+     */
+    fun hotSearches(limit: Int = 12): List<String> {
+        val wanted=limit.coerceIn(1,30)
+        // 种子词**并发**问（串行五个要 1.8s，并发后是单次请求的时间）。
+        val pools=SUGGEST_SEEDS.map { seed -> java.util.concurrent.CompletableFuture.supplyAsync({ suggestionsPool(seed) }, SUGGEST_POOL) }
+            .map { future -> runCatching { future.join() }.getOrDefault(emptyList()) }
+        // 分层 + 层内轮询：
+        // - 先按词类型分层（题材 / 分类 > 平台搜索建议 > 书名）；
+        // - 同一层里**按种子轮询**交替取——一个种子单独就能填满整张表，
+        //   顺着一个种子取的话整排热搜词都是同一个题材的变体（实测全是「…短剧」）。
+        val seen=linkedSetOf<String>()
+        HOT_WORD_ORDER.forEach { type ->
+            if(seen.size>=wanted) return@forEach
+            val lists=pools.map { pool -> pool.filter { it.second==type }.map { it.first } }
+            var round=0
+            while(seen.size<wanted && lists.any { it.size>round }) {
+                lists.forEach { list -> list.getOrNull(round)?.let { if(seen.size<wanted) seen += it } }
+                round++
+            }
+        }
+        return if(seen.isEmpty()) FALLBACK_HOT.take(wanted) else seen.toList()
+    }
+    /** 一个种子词的候选：`(词, word_type)`，过滤掉剧名、过长过短的与重复的。 */
+    private fun suggestionsPool(seed: String): List<Pair<String,String>> =
+        runCatching { suggestions(seed,20) }.getOrDefault(emptyList())
+            .filter { it.series==null && it.name.length in 2..12 }
+            .map { it.name to it.wordType }
+            .distinctBy { it.first }
     fun search(keyword: String, page: Int = 1): CatalogPage = search(keyword,page,ContentType.entries.toList())
     /** 只搜一种内容类型（App 搜索接口的一个 tab）：合并搜索与联调都走这一份实现。 */
     fun search(keyword: String, page: Int, type: ContentType): CatalogPage = search(keyword,page,listOf(type))
@@ -457,44 +578,71 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         return found.values.toList()
     }
     /**
-     * 取播放信息。平台把播放接口改成了带场景段的形式
-     * （路由表里是 `/novel/player/multi_video_model/:dr_scene/v1/`），
-     * **不带场景段的旧路径现在一律返回 `Code 110001 未知异常`**——
-     * 这就是「所有影片都放不了」的原因。因此按「带场景段 → 旧路径」的顺序试，
-     * 第一个业务成功的就用；全失败时抛出最后一个错误，界面照常显示「播放接口暂不可用」。
+     * 取一集的播放模型（`video_model`）。
      *
-     * 场景段目前试出来 `default` 与 `detail` 都能用（返回同一份 `video_model`），
-     * `default` 放在最前面：它不隐含任何页面语义，最不容易随页面改版失效。
+     * 平台 2026-10-14 又改了一次播放接口：原先带场景段的
+     * `/novel/player/multi_video_model/:dr_scene/v1/` 现在一律返回 **HTTP 200 + 空响应体**，
+     * 旧路径 `/novel/player/multi_video_model/v1/` 返回 `Code 110001 未知异常`，
+     * 表现出来还是「所有影片都放不了」。现在能用的那条是 `/novel/player/video_model/v1/`，
+     * 而且**请求体形态也变了**：要 `video_id` 单值，不再是 `mixed_video_id_map`
+     *（给 `mixed_video_id_map` / `vid` / `video_ids` 都返回 `100001 video_id invalid`）。
+     *
+     * 因此按「新路由 → 带场景段 → 旧路径」的顺序试，第一个能取到 `video_model` 的用；
+     * 全失败时抛出最后一个错误，界面照常显示「播放接口暂不可用」。
+     *
+     * **空响应体必须当失败**：网关在业务处理前挡掉请求时就是 `200 + 0 字节`，
+     * 这时业务码取不到、默认成 0，不判空就会被当成成功往下走（0.15.0 那次改版栽的就是这个）。
      */
-    private fun videoModel(payload: ByteArray): JSONObject {
+    private fun videoModel(id: String): JSONObject {
         val host="https://api5-normal-sinfonlineb.fqnovel.com"
-        val paths=listOf(
-            "/novel/player/multi_video_model/default/v1/",
-            "/novel/player/multi_video_model/detail/v1/",
-            "/novel/player/multi_video_model/v1/"
+        val biz="""{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024}"""
+        // 新路由要 `video_id` 单值；带场景段与旧路径要 `mixed_video_id_map`（1004 = 短剧）。
+        val videoMap="""{"biz_param":$biz,"mixed_video_id_map":{"1004":["$id"]}}"""
+        val candidates=listOf(
+            "/novel/player/video_model/v1/" to """{"video_id":"$id","biz_param":$biz}""",
+            "/novel/player/multi_video_model/preload/v1/" to videoMap,
+            "/novel/player/multi_video_model/default/v1/" to videoMap,
+            "/novel/player/multi_video_model/detail/v1/" to videoMap,
+            "/novel/player/multi_video_model/v1/" to videoMap
         )
         var failure: IOException?=null
-        paths.forEach { path ->
+        candidates.forEach { (path,body) ->
             val attempt=runCatching {
+                val payload=body.toByteArray()
                 val signed=signer.sign(host+path,VendorConstants.device,payload)
-                val data=JSONObject(text(signed.url,signed))
+                val response=text(signed.url,signed)
+                // 网关挡掉请求时是 200 + 0 字节：业务码取不到会默认成 0，必须先判空。
+                if(response.isBlank()) throw IOException("播放接口暂不可用（空响应）")
+                val data=JSONObject(response)
                 val code=data.optInt("Code",data.optInt("code",0))
                 // 业务码非 0 就是这一条路不通（110001 是旧路径的「未知异常」，100001 是参数错误）。
-                if(code!=0 || data.optJSONObject("data")==null) throw IOException("播放接口暂不可用（${code}）")
-                data
+                if(code!=0) throw IOException("播放接口暂不可用（${code}）")
+                videoModelOf(data) ?: throw IOException("播放接口暂不可用（没有播放模型）")
             }
             attempt.getOrNull()?.let { return it }
             failure=attempt.exceptionOrNull() as? IOException ?: IOException(attempt.exceptionOrNull()?.message ?: "播放接口暂不可用")
         }
         throw failure ?: IOException("播放接口暂不可用")
     }
+    /**
+     * 从播放接口响应里取出 `video_model`：新路由在 `data.video_model`，
+     * 带场景段 / 旧路径在 `data[<vid>].video_model`。
+     * `video_model` 可能是对象，也可能是**字符串化的 JSON**，两种都要处理。
+     */
+    private fun videoModelOf(data: JSONObject): JSONObject? {
+        val root=data.optJSONObject("data") ?: return null
+        model(root.opt("video_model"))?.let { return it }
+        val entry=root.keys().asSequence().mapNotNull { root.optJSONObject(it) }.firstOrNull() ?: return null
+        return model(entry.opt("video_model"))
+    }
+    private fun model(value: Any?): JSONObject? = when(value) {
+        is JSONObject -> value
+        is String -> runCatching { JSONObject(value) }.getOrNull()
+        else -> null
+    }
     fun stream(id: String, maxQuality: Int = 1080): StreamInfo {
         require(id.matches(Regex("[0-9]{1,30}")))
-        val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
-        val data=videoModel(payload)
-        val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
-        val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
-        val model=entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
+        val model=videoModel(id)
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")

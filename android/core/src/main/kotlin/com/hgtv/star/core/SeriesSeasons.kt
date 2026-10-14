@@ -96,6 +96,14 @@ object SeriesSeasons {
     fun season(title: String): Int = parse(title).season
 
     /**
+     * 卡片右上角标注季号用的文案：`第 13 季`。
+     *
+     * 剧名里没有季号的按第 1 季标（与 [season] 同一套规则）：
+     * 平台的分季信息只写在剧名里，界面上要「每张卡都能读出这是第几季」就只能用它。
+     */
+    fun badge(title: String): String = "第 " + season(title) + " 季"
+
+    /**
      * 比对用的归一化剧名：剥季号 → 全角转半角 → 去掉空白与常见标点。
      *
      * 平台上的剧名写法并不统一（`一梦青玄，团宠小师妹一剑毁天灭地` 与

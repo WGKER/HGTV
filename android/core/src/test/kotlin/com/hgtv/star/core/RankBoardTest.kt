@@ -39,7 +39,7 @@ class RankBoardTest {
      * 页面主标题固定「热播榜」，不跟着按钮变（见界面代码）。
      */
     @Test fun `rank switcher uses the four short labels`() {
-        assertEquals(listOf("漫剧","短剧","真人","AI"),RankBoard.entries.map { it.label })
+        assertEquals(listOf("漫剧","短剧","真人","AI剧"),RankBoard.entries.map { it.label })
         assertEquals(listOf("hot-comic-drama","hot-drama","hot-real-drama","hot-ai-drama"),RankBoard.entries.map { it.route })
     }
 

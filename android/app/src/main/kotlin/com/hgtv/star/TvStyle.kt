@@ -301,6 +301,14 @@ object TvStyle {
     const val BUTTON_TEXT_NORMAL = 16f
     const val BUTTON_TEXT_HERO = 17f
 
+    /**
+     * 海报卡角标的字号：**右下角状态角标与右上角季号共用这一档**。
+     *
+     * 两枚角标贴在同一个井口的两角，字号不一致会读成两套体系；2026-10-14 起从 18sp 收到 12sp
+     * （与卡片状态行同档），不再盖过剧名与封面本身。
+     */
+    const val POSTER_BADGE_TEXT = 12f
+
     /** 按钮最小宽度：短文案（「收藏」「重试」）也不会瘦成一条。 */
     const val BUTTON_MIN_WIDTH = 92
 
@@ -447,6 +455,20 @@ object TvStyle {
         setColor(color)
         val r = radius * context.resources.displayMetrics.density
         cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, r, r)
+    }
+
+    /**
+     * 只圆**顶部**两角的竖向渐变：右上角那枚季号角标的压暗层。
+     *
+     * 参数与 [scrim] 同序（先上后下），只是圆角换到上边：角标贴在井口上角，
+     * 该圆的是它的上缘，下缘要与封面无缝衔接。
+     */
+    fun scrimTop(context: Context, top: Int, bottom: Int, radius: Int = RADIUS_POSTER) = GradientDrawable(
+        GradientDrawable.Orientation.TOP_BOTTOM,
+        intArrayOf(top, bottom)
+    ).apply {
+        val r = radius * context.resources.displayMetrics.density
+        cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
     }
 
     /** 只圆底部的竖向渐变：角标背后的压暗层，上缘要与封面无缝衔接。 */
