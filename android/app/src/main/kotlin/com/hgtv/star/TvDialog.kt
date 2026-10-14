@@ -29,6 +29,21 @@ import android.widget.ScrollView
  */
 internal class TvDialog(private val activity: Activity, title: String) {
 
+    private companion object {
+        /**
+         * 弹窗中部可滚动区域（内容区 + 列表区）合计最多占屏幕高度的比例。
+         *
+         * 更新日志这类长文本原先**不封顶也不滚动**，一长就把按钮行顶出画面——
+         * 用户看得到日志、看不到「更新 / 暂不更新」。现在这一块封顶，超出部分各自滚动，
+         * 按钮行始终留在画面里。
+         *
+         * 两块**共用一个预算**（而不是各占一个比例）：同时出现内容与列表的弹窗
+         * （备份恢复：说明文字 + 选项）加起来才不会顶出一屏。取 .5 加上标题、
+         * 按钮行与弹窗四周留白，整框仍在一屏之内，内容区也还读得下十来行。
+         */
+        const val SCROLLABLE_MAX_FRACTION = .5f
+    }
+
     private val dp = { value: Number -> activity.tvDp(value) }
     /** 弹窗面板的柔光带：面板比窗口边界内缩这么多，投影 / 高光画在这条带里。 */
     private val band = activity.softBandLarge()
@@ -48,6 +63,22 @@ internal class TvDialog(private val activity: Activity, title: String) {
         clipChildren = false
         clipToPadding = false
     }
+
+    /**
+     * 内容区的滚动容器。
+     *
+     * 裁剪由 [contentHost] 提供（与列表同一套规则）。内边距**不在这里写死**：
+     * 上下那点 [TvStyle.FOCUS_BLEED] 只在内容里真有可聚焦控件时（备份恢复弹窗那个开关）
+     * 才补上——纯文字弹窗留了只是白占高度；左右不留，内容自己已经有左右余量，
+     * 这里再加一份会让正文比标题多缩进一条，两处对不齐。
+     */
+    private val contentScroll = ScrollView(activity).apply {
+        isVerticalScrollBarEnabled = false
+        clipChildren = false
+        clipToPadding = false
+    }
+    /** 内容区的裁剪外壳：内容超过封顶高度后，滚动只发生在这一块里。 */
+    private val contentHost = activity.tvScrollHost(contentScroll)
 
     private val items = activity.tvColumn().apply {
         clipChildren = false
@@ -80,20 +111,32 @@ internal class TvDialog(private val activity: Activity, title: String) {
                 .apply { setPadding(dp(TvStyle.FOCUS_BLEED), 0, dp(TvStyle.FOCUS_BLEED), 0) }
         )
         content.setPadding(dp(TvStyle.FOCUS_BLEED), 0, dp(TvStyle.FOCUS_BLEED), 0)
-        body.addView(content, LinearLayout.LayoutParams(-1, -2))
+        contentScroll.addView(content)
+        body.addView(contentHost, LinearLayout.LayoutParams(-1, -2))
         scroll.addView(items)
         body.addView(listHost, LinearLayout.LayoutParams(-1, -2))
         actions.setPadding(dp(TvStyle.FOCUS_BLEED), 0, dp(TvStyle.FOCUS_BLEED), 0)
         body.addView(actions, LinearLayout.LayoutParams(-1, -2))
-        // 内容区可能在建好之后才被填（二维码、复选框），因此间距跟着子控件数量走。
+        // 内容区可能在建好之后才被填、也可能被清空重填（手机输入 / 备份恢复那两处会 removeAllViews）。
+        // 因此这里**不用 visibility 开关**：把宿主设成 GONE 之后它的子控件不再被测量，
+        // 这条布局回调也就不会再触发，清空后重填的内容会永远不显示。
+        // 改成始终可见、只按内容数量调间距——内容为空时 [content] 的自然高度是 0，
+        // 宿主跟着是 0 高，同样不留空槽。
         content.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
             val column = view as? LinearLayout ?: return@addOnLayoutChangeListener
-            val params = column.layoutParams as? LinearLayout.LayoutParams ?: return@addOnLayoutChangeListener
-            val wanted = if (column.childCount == 0) 0 else dp(TvStyle.GAP_BLOCK)
+            val params = contentHost.layoutParams as? LinearLayout.LayoutParams ?: return@addOnLayoutChangeListener
+            val wanted = if (column.childCount > 0) dp(TvStyle.GAP_BLOCK) else 0
             if (params.topMargin != wanted) {
                 params.topMargin = wanted
-                column.layoutParams = params
+                contentHost.layoutParams = params
             }
+            // 上下焦点余量**只在内容里真有可聚焦控件时**才留（见 [contentScroll]）：
+            // 纯文字弹窗（更新日志、开源许可、二次确认）留了也是白占高度。
+            val bleed = if (column.anyFocusable()) dp(TvStyle.FOCUS_BLEED) else 0
+            if (contentScroll.paddingTop != bleed || contentScroll.paddingBottom != bleed) {
+                contentScroll.setPadding(0, bleed, 0, bleed)
+            }
+            capContent()
         }
     }
 
@@ -186,18 +229,79 @@ internal class TvDialog(private val activity: Activity, title: String) {
             )
         }
         // 列表超过半屏就滚动，避免弹窗被长列表顶出画面。
+        // 列表与内容区共用 [SCROLLABLE_MAX_FRACTION] 这一份预算（见 [capContent]）：
+        // 两块都在时各分一半，只有一块时那一块独占，加起来始终在一屏之内。
         if (listHeight > 0) {
-            val limit = (metrics.heightPixels * .56f).toInt()
+            val limit = (metrics.heightPixels * SCROLLABLE_MAX_FRACTION).toInt()
             listHost.layoutParams = listHost.layoutParams.apply { height = listHeight.coerceAtMost(limit) }
         }
         // 焦点落在第一项（列表优先），因此「确认」永远不会是默认落点，误触不会造成破坏。
         body.post {
             if (!isShowing) return@post
             (if (items.childCount > 0) items.getChildAt(0) else buttons.firstOrNull())?.requestFocus()
+            // 布局完成之后再量一次：这时才知道内容有没有溢出、要不要封顶（见 [capContent]）。
+            capContent()
         }
+    }
+
+    /**
+     * 内容区封顶与滚动接线。
+     *
+     * 更新日志这类长文本会把按钮行顶出画面，因此内容区与列表区共用
+     * [SCROLLABLE_MAX_FRACTION] 这一份高度预算，超出部分交给 [contentScroll] 滚动。
+     * **只有真的溢出时才让内容区可聚焦**：那时按上键可以从按钮行进到日志里上下滚动；
+     * 短内容不参与焦点链，行为与以前完全一致。
+     *
+     * `ScrollView` 给子控件测高时用的是 UNSPECIFIED，因此 [content] 的高度始终是「自然高度」，
+     * 封顶不会反过来把自然高度压小，这个判断是收敛的。
+     */
+    private fun capContent() {
+        val metrics = activity.resources.displayMetrics
+        // 内容区与列表区共用同一份预算：另一块已经占了高度时，这一块只能用剩下的部分。
+        // 两块都短就各自按自然高度摆，谁都不封顶。
+        val budget = (metrics.heightPixels * SCROLLABLE_MAX_FRACTION).toInt()
+        val used = if (listHeight > 0) (listHost.layoutParams.height).coerceAtLeast(0) else 0
+        val cap = (budget - used).coerceAtLeast((metrics.heightPixels * .18f).toInt())
+        val overflow = content.height > cap
+        val params = contentHost.layoutParams as? LinearLayout.LayoutParams ?: return
+        val wanted = if (overflow) cap else ViewGroup.LayoutParams.WRAP_CONTENT
+        if (params.height != wanted) {
+            params.height = wanted
+            contentHost.layoutParams = params
+        }
+        // 内容里有可聚焦控件时（备份恢复弹窗那个开关），焦点交给那个控件自己——
+        // 让滚动容器抢焦点会把那个控件挡在焦点链之外。ScrollView 会自动把获得焦点的子控件滚进可视区。
+        val innerFocusable = content.anyFocusable()
+        val scrollFocusable = overflow && !innerFocusable
+        contentScroll.isFocusable = scrollFocusable
+        contentScroll.isFocusableInTouchMode = scrollFocusable
+        if (!overflow) return
+        if (contentScroll.id == View.NO_ID) contentScroll.id = View.generateViewId()
+        // 按钮行按上键进内容区（内容区自己可聚焦时进它，否则进里面第一个可聚焦控件）；
+        // 内容区按下键回按钮行——两端各接一次，方向是连着的。
+        val up = if (scrollFocusable) contentScroll else content.firstFocusable() ?: contentScroll
+        buttons.forEach { it.nextFocusUpId = up.id }
+        contentScroll.nextFocusDownId = buttons.firstOrNull()?.id ?: contentScroll.id
     }
 
     fun dismiss() {
         dialog?.dismiss()
     }
+}
+
+/** 子树里有没有可聚焦的控件（跳过不可见的）。 */
+private fun View.anyFocusable(): Boolean {
+    if (visibility != View.VISIBLE) return false
+    if (isFocusable) return true
+    val group = this as? ViewGroup ?: return false
+    return (0 until group.childCount).any { group.getChildAt(it).anyFocusable() }
+}
+
+/** 子树里第一个可聚焦的控件（跳过不可见的），没有就返回 null。 */
+private fun View.firstFocusable(): View? {
+    if (visibility != View.VISIBLE) return null
+    if (isFocusable) return this
+    val group = this as? ViewGroup ?: return null
+    for (i in 0 until group.childCount) group.getChildAt(i).firstFocusable()?.let { return it }
+    return null
 }
