@@ -118,17 +118,45 @@ for name in files:
             check("%s:%d scroll container hangs on a clipping host" % (name, index + 1),
                   "tvScrollHost(" in window)
 
-# 10. 重建型渲染函数里复用「长期持有的按钮」必须经过 rehost()。
+# 10. 重建型渲染函数里复用「长期持有的控件」必须经过 rehost()。
 #     ViewGroup.addView() 遇到已经有父级的子控件会抛 IllegalStateException；
-#     而列表整体重建时 contents.removeAllViews() 只摘掉**直接**子控件，
-#     行里面的按钮仍然挂在旧行上 —— 第二次重建必崩，触发时机是收藏更新检查这类异步事件，
-#     表现出来就是「用着用着偶发崩溃」。首页的 refresh 按钮就是这个坑。
-check("TvComponents provides rehost", "fun ViewGroup.rehost(" in components)
-rehost = components.split("fun ViewGroup.rehost(", 1)[1].split("\n}", 1)[0]
-check("rehost detaches the view from its old parent first", "parent as? ViewGroup)?.removeView(view)" in rehost)
-check("HomeScreen re-hosts the long-lived refresh button", "rehost(refresh" in files["HomeScreen.kt"])
-for number, line in lines("HomeScreen.kt"):
-    check("HomeScreen.kt:%d long-lived button is not re-added raw" % number, "addView(refresh" not in line)
+#     而列表整体重建时 removeAllViews() 只摘掉**直接**子控件，
+#     行里面的控件仍然挂在旧行上 —— 第二次重建必崩，触发时机是收藏更新检查这类异步事件，
+#     表现出来就是「用着用着偶发崩溃」。0.11.0 的首页 refresh 按钮就是这个坑。
+#
+#     这条规则原来写死成「HomeScreen 里必须有 rehost(refresh」：refresh 按钮后来整体
+#     搬到了顶部圆形入口（见 MainActivity 顶部导航栏注释），那个字符串再也不存在，
+#     断言就成了一条永远为假的死规则——既不保护代码，也让人以为护栏还在。
+#     现在改成**通用检查**：缩进 4 空格声明的属性（= 跨函数存活的长期持有控件）
+#     出现在一个带 removeAllViews() 的重建函数里、被裸 addView 挂载、且这个函数
+#     没有重新给它赋值，就报错——这正是「第二次重建抛 IllegalStateException」的形状。
+FIELD = re.compile(r"^ {4}(?:private |internal |protected )?(?:lateinit )?(?:val|var) (\w+)\s*[:=]", re.M)
+FUNCTION = re.compile(r"^ {4}(?:private |internal |public |protected )?(?:override )?(?:suspend )?fun \w+|^ {4}init \{")
+
+
+def function_bodies(text):
+    """按顶层成员切成 (起始行号, 函数体)：缩进 4 空格的 fun / init 各算一段。"""
+    source = text.split("\n")
+    starts = [i for i, line in enumerate(source) if FUNCTION.match(line)]
+    for index, begin in enumerate(starts):
+        stop = starts[index + 1] if index + 1 < len(starts) else len(source)
+        yield begin + 1, "\n".join(source[begin:stop])
+
+
+for name, text in files.items():
+    held = set(FIELD.findall(text))
+    if not held:
+        continue
+    for start, body in function_bodies(text):
+        if "removeAllViews()" not in body:
+            continue
+        for field in sorted(held):
+            if not re.search(r"addView\(\s*%s\b" % re.escape(field), body):
+                continue
+            # 同一个函数里重新赋值 = 每次重建都是新控件，不共享父级，安全。
+            if re.search(r"^\s*%s\s*=" % re.escape(field), body, re.M):
+                continue
+            check("%s:%d long-lived %s is re-hosted, not re-added" % (name, start, field), False)
 
 # 11. 页头收展的动画表：只能先快照 / 先摘除，再取消。
 #     ValueAnimator.cancel() 会**同步**回调 onAnimationEnd，而那条回调会从这张表里摘掉自己；

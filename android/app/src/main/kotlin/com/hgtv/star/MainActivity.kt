@@ -2962,7 +2962,15 @@ class MainActivity: Activity() {
         // 整宽贴在画面下方，**高度锁死在屏幕高度的三分之一**，超出的行靠上下键滚出来。
         // 面板本身就是滚动内容，渐变背板画在外壳上：否则背板会跟着内容一起被拉长，
         // 滚到下半段时面板顶部会变成半黑，而不是「从透明渐渐暗下去」。
-        val shell=tvScrollHost(ScrollView(this).apply {
+        // 这里**不补 FOCUS_BLEED_VERTICAL**，只按豁免标注（见 docs/UI_REDESIGN.md 第 3 条）：
+        //   · 横向：外壳整屏宽，菜单自己的左右内边距就是 78dp 内容线，最左 / 最右那枚选项
+        //     放大 2.5% 之后离屏幕边还有 ≥68dp，画不到边界；
+        //   · 纵向：面板里最高的一件是紧凑档选项（BUTTON_COMPACT + 2 × SOFT_BAND = 52dp），
+        //     放大 1.05 倍向上 / 向下各溢出 52 × 2.5% ≈ 1.3dp，下面那 6dp 内边距已经盖住；
+        //     而且首行之上还有菜单自己的 24dp 上内边距。
+        // 换成 focusBleed() 会把左右内边距一并撑到 7dp，内容线就从 78dp 变成 85dp，
+        // 与顶部标题条（78dp）对不齐，因此这里只标注、不补余量。
+        val shell=tvScrollHost(ScrollView(this).apply { // focus-bleed-exempt: 外壳整屏宽、左右内容线 78dp；纵向溢出 ≤1.3dp 已由 6dp 内边距覆盖
             isVerticalScrollBarEnabled=false
             isFocusable=false
             clipChildren=false

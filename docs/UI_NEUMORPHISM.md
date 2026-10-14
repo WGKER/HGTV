@@ -358,7 +358,7 @@ python3 tools/theme-preview.py                # 十四套主题 × 状态台阶�
    或 `dp(TvStyle.BUTTON_XXX + 2 * TvStyle.SOFT_BAND)`。
 6. **内边距不再各写各的**：横向内边距只能来自 `size.pad`（`paintButton` 内部），
    调用方不再自己拼 `setPadding(dp(32), ...)` 这类字面量。
-7. **长期持有的控件重新挂载必须走 `rehost()`**。
+7. **长期持有的控件重新挂载必须走 `rehost()`**。判定不看具体控件名，看形状：缩进 4 空格声明的属性（跨函数存活）出现在带 `removeAllViews()` 的重建函数里、被裸 `addView` 挂载、且该函数没有重新给它赋值 —— 这就是「第二次重建抛 `IllegalStateException`」的形状，`tools/verify-button-system.py` 第 10 条按此核对。
 8. **焦点图（`nextFocusXxxId`）与按键处理一行不改**：换皮不动交互。
 9. **选框不带颜色**：`ring=` 上不允许出现 `TvStyle.accent`，`accentGlow` 已经删除，
    选中态只能是「按进去」（`TvStyle.well` + `INSET`）或「抬一档」（`TvStyle.selectedFace`），
