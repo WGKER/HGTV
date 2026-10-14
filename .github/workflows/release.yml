@@ -1,9 +1,10 @@
 name: Release Android TV APK
 
 # 每次推送到 main：比较这次提交与上一次的 versionName / versionCode。
-#   两个都变了 → 打包并发布 Release（tag = v<版本号>）
-#   只有其中一个变 → 失败，提示必须同时改
-#   都没变        → 跳过，不打包
+#   两个都**严格大于**基准 → 打包并发布 Release（tag = v<版本号>）
+#   两个都与基准相同      → 跳过，不打包（只改代码没升版本的普通推送）
+#   其余（只升一个 / 降了）→ 失败，提示版本必须同时增大
+# 比对规则在 tools/compare-version.sh，本地可单独跑（用法见该脚本头部）。
 # 手动触发时可选 force=true，跳过比对直接发布当前版本（补发失败 Release 用）。
 on:
   push:
@@ -108,10 +109,6 @@ jobs:
           new_code="${{ steps.current.outputs.code }}"
           echo "基准版本：versionName=${old_version} versionCode=${old_code}"
 
-          version_changed=false; code_changed=false
-          [ "$old_version" != "$new_version" ] && version_changed=true
-          [ "$old_code" != "$new_code" ] && code_changed=true
-
           # 发布说明用本次提交的信息（subject + body），客户端更新弹窗会显示它。
           {
             echo "notes<<HGTV_NOTES_EOF"
@@ -119,15 +116,24 @@ jobs:
             echo "HGTV_NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
-          if $version_changed && $code_changed; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          elif $version_changed || $code_changed; then
-            echo "::error::版本号与版本 code 必须同时变动（本次 versionName ${old_version} → ${new_version}、versionCode ${old_code} → ${new_code}）"
-            exit 1
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "版本未变动，跳过打包与发布。"
-          fi
+          # 只有两个都**严格大于**基准才发布；判定逻辑收在 tools/compare-version.sh，
+          # 本地可单独跑同一份规则（避免 CI 与本地各写一套比较）。
+          # 工具在参数异常时以非零退出（set -e 会直接中断且看不出原因），这里显式接住。
+          decision="$(tools/compare-version.sh "$old_version" "$old_code" "$new_version" "$new_code" | tail -1)" || decision=""
+          [ -n "$decision" ] || { echo "::error::版本比对失败，请检查 tools/compare-version.sh 的输出"; exit 1; }
+          case "$decision" in
+            release)
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              ;;
+            skip)
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              echo "版本未变动，跳过打包与发布。"
+              ;;
+            *)
+              echo "::error::版本必须同时大于基准才发布（versionName ${old_version} → ${new_version}、versionCode ${old_code} → ${new_code}）"
+              exit 1
+              ;;
+          esac
 
   release:
     name: 打包并发布

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 同步修改 versionName 与 versionCode —— 发布工作流要求两者同时变动。
+# 同步修改 versionName 与 versionCode —— 发布工作流要求两者同时**增大**（不是「都变了」）。
+# 比对规则见 tools/compare-version.sh。
 #
 # 用法：
 #   tools/bump-version.sh 0.16.0        # 版本号自增，versionCode 自动 +1
