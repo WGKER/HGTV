@@ -5,7 +5,8 @@ README 里展示的资源都在这里：
 - `app-logo.png`：应用图标（与 APK 内图标同一份几何，`tools/app-icon.py` 生成）。
 - `theme.png`：十四套材质主题排成 7 列 × 2 行的对比图（`tools/theme-preview.py`）。
 - `1.jpg` – `3.jpg`、`7.jpg` – `9.jpg`：界面截图。
-- `4.png` – `6.png`：界面截图（搜索 / 分类 / 热播榜，2026-10-14 更新，2560×1440）。
+- `4.webp` – `6.webp`：界面截图（搜索 / 分类 / 热播榜，2026-10-14 更新，2560×1440）。
+  WebP q88，画质近无损（与原图平均差 1.4），体积约 1/8；原始 PNG 留在 `.local/originals/` 不入库。
 
 维护者头像在 [`docs/maintainers/`](../maintainers/)（256px 圆形透明底 PNG，由 `tools/maintainer-avatars.py` 生成）。
 

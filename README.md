@@ -44,9 +44,9 @@
 <td align="center"><img src="docs/preview/3.jpg" width="100%" alt="界面截图 3"></td>
 </tr>
 <tr>
-<td align="center"><img src="docs/preview/4.png" width="100%" alt="界面截图 4"></td>
-<td align="center"><img src="docs/preview/5.png" width="100%" alt="界面截图 5"></td>
-<td align="center"><img src="docs/preview/6.png" width="100%" alt="界面截图 6"></td>
+<td align="center"><img src="docs/preview/4.webp" width="100%" alt="界面截图 4"></td>
+<td align="center"><img src="docs/preview/5.webp" width="100%" alt="界面截图 5"></td>
+<td align="center"><img src="docs/preview/6.webp" width="100%" alt="界面截图 6"></td>
 </tr>
 <tr>
 <td align="center"><img src="docs/preview/7.jpg" width="100%" alt="界面截图 7"></td>
