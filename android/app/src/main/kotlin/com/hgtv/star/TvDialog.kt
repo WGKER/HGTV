@@ -6,6 +6,7 @@ import android.app.AlertDialog
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 
@@ -77,8 +78,44 @@ internal class TvDialog(private val activity: Activity, title: String) {
         clipChildren = false
         clipToPadding = false
     }
-    /** 内容区的裁剪外壳：内容超过封顶高度后，滚动只发生在这一块里。 */
-    private val contentHost = activity.tvScrollHost(contentScroll)
+    /**
+     * 内容区的裁剪外壳：在**测量阶段**就把高度压到上限之内。
+     *
+     * 为什么不用「布局完成后再改 LayoutParams」那种做法：那要依赖 `OnLayoutChangeListener`，
+     * 而它的时机跟「弹窗是第一次弹出、还是同一个位置再弹一次」有关——
+     * 第二次弹出时内容**一开始就是长的**（状态文字上一次检查后就已经是整段更新日志），
+     * 于是 `show()` 里那次 `post` 量到的还是 0 高度、判定成「不溢出」，
+     * 而随后的布局回调也没能把按钮救回来，表现出来就是「第一次能滚、再打开按钮又被顶没」。
+     * 放在测量阶段就没有这个时序问题：无论内容何时变长，量的时候就已经封顶了。
+     */
+    private inner class ContentHost : FrameLayout(activity) {
+        init {
+            clipChildren = true
+            clipToPadding = true
+        }
+
+        /** 当前是不是「内容超出上限、正在滚动」的状态。 */
+        private var overflow = false
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            // 先按自然高度量一次。`ScrollView` 给子控件传的是 UNSPECIFIED，
+            // 因此这一次量到的就是内容的真实高度，不会被上限反过来压小。
+            super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+            val natural = measuredHeight
+            val cap = contentCap()
+            val next = natural > cap
+            if (next) super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(cap, View.MeasureSpec.EXACTLY))
+            if (next != overflow) {
+                overflow = next
+                // 测量里不改焦点链（那是布局的事），推到下一帧做。
+                post { if (isShowing) wireContentFocus(next) }
+            }
+        }
+    }
+
+    private val contentHost = ContentHost().apply {
+        addView(contentScroll, FrameLayout.LayoutParams(-1, -1))
+    }
 
     private val items = activity.tvColumn().apply {
         clipChildren = false
@@ -132,11 +169,11 @@ internal class TvDialog(private val activity: Activity, title: String) {
             }
             // 上下焦点余量**只在内容里真有可聚焦控件时**才留（见 [contentScroll]）：
             // 纯文字弹窗（更新日志、开源许可、二次确认）留了也是白占高度。
+            // 封顶不在这里做——那件事已经交给 [ContentHost] 的测量（见那里的注释）。
             val bleed = if (column.anyFocusable()) dp(TvStyle.FOCUS_BLEED) else 0
             if (contentScroll.paddingTop != bleed || contentScroll.paddingBottom != bleed) {
                 contentScroll.setPadding(0, bleed, 0, bleed)
             }
-            capContent()
         }
     }
 
@@ -229,7 +266,7 @@ internal class TvDialog(private val activity: Activity, title: String) {
             )
         }
         // 列表超过半屏就滚动，避免弹窗被长列表顶出画面。
-        // 列表与内容区共用 [SCROLLABLE_MAX_FRACTION] 这一份预算（见 [capContent]）：
+        // 列表与内容区共用 [SCROLLABLE_MAX_FRACTION] 这一份预算（见 [contentCap]）：
         // 两块都在时各分一半，只有一块时那一块独占，加起来始终在一屏之内。
         if (listHeight > 0) {
             val limit = (metrics.heightPixels * SCROLLABLE_MAX_FRACTION).toInt()
@@ -239,46 +276,40 @@ internal class TvDialog(private val activity: Activity, title: String) {
         body.post {
             if (!isShowing) return@post
             (if (items.childCount > 0) items.getChildAt(0) else buttons.firstOrNull())?.requestFocus()
-            // 布局完成之后再量一次：这时才知道内容有没有溢出、要不要封顶（见 [capContent]）。
-            capContent()
+            // 封顶由 [ContentHost] 的测量负责，这里只补一次焦点接线兜底
+            // （内容为空时测量里不会报「溢出」，也就不会有人来接线）。
+            wireContentFocus(content.height > contentCap())
         }
     }
 
     /**
-     * 内容区封顶与滚动接线。
+     * 内容区可用的高度上限（见 [ContentHost]）。
      *
-     * 更新日志这类长文本会把按钮行顶出画面，因此内容区与列表区共用
-     * [SCROLLABLE_MAX_FRACTION] 这一份高度预算，超出部分交给 [contentScroll] 滚动。
-     * **只有真的溢出时才让内容区可聚焦**：那时按上键可以从按钮行进到日志里上下滚动；
-     * 短内容不参与焦点链，行为与以前完全一致。
-     *
-     * `ScrollView` 给子控件测高时用的是 UNSPECIFIED，因此 [content] 的高度始终是「自然高度」，
-     * 封顶不会反过来把自然高度压小，这个判断是收敛的。
+     * 内容区与列表区共用 [SCROLLABLE_MAX_FRACTION] 这一份预算：另一块已经占了高度时，
+     * 这一块只能用剩下的部分；两块都短就各自按自然高度摆，谁都不封顶。
      */
-    private fun capContent() {
+    private fun contentCap(): Int {
         val metrics = activity.resources.displayMetrics
-        // 内容区与列表区共用同一份预算：另一块已经占了高度时，这一块只能用剩下的部分。
-        // 两块都短就各自按自然高度摆，谁都不封顶。
         val budget = (metrics.heightPixels * SCROLLABLE_MAX_FRACTION).toInt()
-        val used = if (listHeight > 0) (listHost.layoutParams.height).coerceAtLeast(0) else 0
-        val cap = (budget - used).coerceAtLeast((metrics.heightPixels * .18f).toInt())
-        val overflow = content.height > cap
-        val params = contentHost.layoutParams as? LinearLayout.LayoutParams ?: return
-        val wanted = if (overflow) cap else ViewGroup.LayoutParams.WRAP_CONTENT
-        if (params.height != wanted) {
-            params.height = wanted
-            contentHost.layoutParams = params
-        }
-        // 内容里有可聚焦控件时（备份恢复弹窗那个开关），焦点交给那个控件自己——
-        // 让滚动容器抢焦点会把那个控件挡在焦点链之外。ScrollView 会自动把获得焦点的子控件滚进可视区。
+        val used = if (listHeight > 0) listHost.layoutParams.height.coerceAtLeast(0) else 0
+        return (budget - used).coerceAtLeast((metrics.heightPixels * .18f).toInt())
+    }
+
+    /**
+     * 内容区溢出时的焦点接线。
+     *
+     * **只有真的溢出时才让内容区可聚焦**：那时按钮行按上键能进日志区上下滚动、
+     * 按下键回按钮行；短内容不参与焦点链，行为与以前完全一致。
+     * 内容里有可聚焦控件时（备份恢复弹窗那个开关），焦点交给那个控件自己——
+     * 让滚动容器抢焦点会把那个控件挡在焦点链之外（`ScrollView` 会自动把获得焦点的子控件滚进可视区）。
+     */
+    private fun wireContentFocus(overflow: Boolean) {
         val innerFocusable = content.anyFocusable()
         val scrollFocusable = overflow && !innerFocusable
         contentScroll.isFocusable = scrollFocusable
         contentScroll.isFocusableInTouchMode = scrollFocusable
         if (!overflow) return
         if (contentScroll.id == View.NO_ID) contentScroll.id = View.generateViewId()
-        // 按钮行按上键进内容区（内容区自己可聚焦时进它，否则进里面第一个可聚焦控件）；
-        // 内容区按下键回按钮行——两端各接一次，方向是连着的。
         val up = if (scrollFocusable) contentScroll else content.firstFocusable() ?: contentScroll
         buttons.forEach { it.nextFocusUpId = up.id }
         contentScroll.nextFocusDownId = buttons.firstOrNull()?.id ?: contentScroll.id

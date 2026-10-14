@@ -60,7 +60,7 @@
 从 [Releases](https://github.com/pan8664716/HGTV/releases/latest) 下载最新正式 APK，拷到电视安装，或用 ADB 覆盖安装：
 
 ```sh
-adb install -r HGTV_1.0.3.apk    # 文件名：<标识>_<版本号>.apk
+adb install -r HGTV_1.0.4.apk    # 文件名：<标识>_<版本号>.apk
 ```
 
 进入应用时若发现新版本会弹窗询问，设置 → 版本与更新里也可手动检查并覆盖安装；本机收藏、进度与设置保留。
