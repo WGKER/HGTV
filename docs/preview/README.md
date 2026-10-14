@@ -4,7 +4,8 @@ README 里展示的资源都在这里：
 
 - `app-logo.png`：应用图标（与 APK 内图标同一份几何，`tools/app-icon.py` 生成）。
 - `theme.png`：十四套材质主题排成 7 列 × 2 行的对比图（`tools/theme-preview.py`）。
-- `1.jpg` – `9.jpg`：界面截图。
+- `1.jpg` – `3.jpg`、`7.jpg` – `9.jpg`：界面截图。
+- `4.png` – `6.png`：界面截图（搜索 / 分类 / 热播榜，2026-10-14 更新，2560×1440）。
 
 维护者头像在 [`docs/maintainers/`](../maintainers/)（256px 圆形透明底 PNG，由 `tools/maintainer-avatars.py` 生成）。
 
