@@ -118,7 +118,8 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         active = true
         refreshDeclineState()
         main.removeCallbacks(poll)
-        main.postDelayed(poll, 8000)
+        // ========== 注释下面这一行，关闭APP前台自动轮询检测更新 ==========
+        //main.postDelayed(poll, 8000)
         if (permissionRequested) {
             permissionRequested = false
             if (activity.packageManager.canRequestPackageInstalls()) install()
