@@ -1,4 +1,4 @@
-name: Release Android TV APK
+name: test Release Android TV APK
 # 每次推送到 main：把本次的 versionName / versionCode 与**上一次发布的 tag**比较
 # （不是「上一个提交」——中间夹了多少次不升版本的普通推送都不影响基线）。
 #   两个都**严格大于**基准 → 打包（仅上传artifact，不再发布Release）
